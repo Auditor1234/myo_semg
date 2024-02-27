@@ -1,0 +1,335 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from collections import OrderedDict
+
+
+class CNN(nn.Module):
+    """
+    input data shape must be shape(B,1,8,200)
+    """
+    def __init__(self, classes=10, features=False) -> None:
+        super().__init__()
+        self.features = features
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=(3,19), padding=(1,9))
+        self.pool1 = nn.MaxPool2d((1,10), stride=(1,10)) # shape(B,32,8,20)
+
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=(3,3), padding=1)
+        self.pool2 = nn.MaxPool2d((4,4), stride=(4,4)) # shape(B,32,2,5)
+
+        self.relu = nn.ReLU()
+        self.softplus = nn.Softplus()
+        self.drop = nn.Dropout()
+
+        self.flat = nn.Flatten()
+        self.linear1 = nn.Linear(320,64)
+
+        self.linear2 = nn.Linear(64, classes)
+
+    def forward(self, x):
+        x = self.pool1(self.relu(self.conv1(x)))
+        x = self.pool2(self.relu(self.conv2(x)))
+
+        x = self.flat(x)
+        x = self.drop(x)
+        x = self.relu(self.linear1(x))
+
+        if self.features:
+            return x
+        x = self.drop(x)
+        x = self.softplus(self.linear2(x))
+        return x
+
+
+class LayerNorm(nn.LayerNorm):
+    """Subclass torch's LayerNorm to handle fp16."""
+
+    def forward(self, x: torch.Tensor):
+        orig_type = x.dtype
+        ret = super().forward(x.type(torch.float16))
+        return ret.type(orig_type)
+
+
+class Transformer(nn.Module):
+    def __init__(self, width: int, layers: int, heads: int, attn_mask: torch.Tensor = None):
+        super().__init__()
+        self.width = width
+        self.layers = layers
+        self.resblocks = nn.Sequential(*[ResidualAttentionBlock(width, heads, attn_mask) for _ in range(layers)])
+
+    def forward(self, x: torch.Tensor):
+        return self.resblocks(x)
+
+
+class QuickGELU(nn.Module):
+    def forward(self, x: torch.Tensor):
+        return x * torch.sigmoid(1.702 * x)
+
+
+class ResidualAttentionBlock(nn.Module):
+    def __init__(self, d_model: int, n_head: int, attn_mask: torch.Tensor = None):
+        super().__init__()
+
+        self.attn = nn.MultiheadAttention(d_model, n_head) # 768 12
+        self.ln_1 = LayerNorm(d_model)
+        self.mlp = nn.Sequential(OrderedDict([
+            ("c_fc", nn.Linear(d_model, d_model * 4)),
+            ("gelu", QuickGELU()),
+            ("c_proj", nn.Linear(d_model * 4, d_model))
+        ]))
+        self.ln_2 = LayerNorm(d_model)
+        self.attn_mask = attn_mask
+
+    def attention(self, x: torch.Tensor):
+        self.attn_mask = self.attn_mask.to(dtype=x.dtype, device=x.device) if self.attn_mask is not None else None
+        return self.attn(x, x, x, need_weights=False, attn_mask=self.attn_mask)[0]
+
+    def forward(self, x: torch.Tensor):
+        x = x + self.attention(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+
+
+class EMGViT(nn.Module):
+    # input shape(B,1,8,200)
+    def __init__(self, output_dim, window_size=200, patch_size=8, width=64, layers=1, heads=32, features=False):
+        super().__init__()
+        self.features = features
+        self.output_dim = output_dim
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=width, kernel_size=(patch_size, patch_size), stride=(patch_size, patch_size), bias=False)
+
+        scale = width ** -0.5 # 0.2
+        self.class_embedding = nn.Parameter(scale * torch.randn(width))
+        self.positional_embedding = nn.Parameter(scale * torch.randn((window_size // patch_size) + 1, width))
+        self.ln_pre = LayerNorm(width)
+
+        self.transformer = Transformer(width, layers, heads)
+
+        self.ln_post = LayerNorm(width)
+        self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
+        self.softplus = nn.Softplus()
+
+    def forward(self, x: torch.Tensor):
+        # shape(B,1,8,200)
+        x = self.conv1(x)  # shape(B,width,1,25)
+        x = x.reshape(x.shape[0], x.shape[1], -1)  # shape(B,width,25)
+        x = x.permute(0, 2, 1)  # shape(B,25,width)
+        x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape(B,25 + 1,width)
+        x = x + self.positional_embedding.to(x.dtype) # shape(B,26,width)
+        x = self.ln_pre(x) # shape(B,26,width)
+
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x) # shape(26,B,width)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+
+        x = self.ln_post(x[:, 0, :]) # shape(B,width)
+
+        if self.features:
+            return x
+
+        if self.proj is not None:
+            x = x @ self.proj
+            x = self.softplus(x)
+
+        return x # shape(1,512)
+
+
+class VCConcat(nn.Module):
+    def __init__(self, classes=10) -> None:
+        super().__init__()
+
+        feature_dim=64
+        self.cnn = CNN(classes, features=True)
+        self.vit = EMGViT(
+                    window_size=200,
+                    patch_size=8,
+                    width=feature_dim,
+                    layers=1,
+                    heads=32,
+                    output_dim=classes,
+                    features=True
+                    )
+        self.linear = nn.Linear(feature_dim * 2, classes)
+    
+    def forward(self, x):
+        x1 = self.vit(x)
+        x2 = self.cnn(x)
+        x = torch.concat((x1, x2), dim=-1)
+        x = self.linear(x)
+        return x
+
+
+class VCEvidential(nn.Module):
+    def __init__(self, classes=10) -> None:
+        super().__init__()
+
+        feature_dim=64
+        self.classes = classes
+        self.cnn = CNN(classes, features=True)
+        self.vit = EMGViT(
+                    window_size=200,
+                    patch_size=8,
+                    width=feature_dim,
+                    layers=1,
+                    heads=32,
+                    output_dim=classes,
+                    features=True
+                    )
+        self.linear1 = nn.Linear(feature_dim, classes)
+        self.linear2 = nn.Linear(feature_dim, classes)
+        self.softplus = nn.Softplus()
+    
+    def forward(self, x):
+        x1 = self.softplus(self.linear1(self.vit(x)))
+        x2 = self.softplus(self.linear2(self.cnn(x)))
+        
+        if self.training:
+            return x1, x2
+        
+        from loss import DS_Combin
+        return DS_Combin((x1 + 1, x2 + 1), self.classes)
+
+
+class VCEnsemble(nn.Module):
+    def __init__(self, classes=10) -> None:
+        super().__init__()
+
+        feature_dim=64
+        self.cnn = CNN(classes)
+        self.vit = EMGViT(
+                    window_size=200,
+                    patch_size=8,
+                    width=feature_dim,
+                    layers=1,
+                    heads=32,
+                    output_dim=classes
+                    )
+        self.weights = nn.Parameter(torch.rand(2))
+        self.softmax = nn.Softmax(dim=-1)
+    
+    def forward(self, x):
+        x1 = self.vit(x)
+        x2 = self.cnn(x)
+        weights = self.softmax(self.weights)
+        x = weights[0] * x1 + weights[1] * x2
+        return x
+
+
+class Gating(nn.Module):
+    """
+    input data shape must be shape(B,1,8,200)
+    """
+    def __init__(self, input_dim,
+                 num_experts, dropout_rate=0.1):
+        super(Gating, self).__init__()
+
+        # Layers
+        self.flatten = nn.Flatten()
+        self.drop = nn.Dropout(dropout_rate)
+        self.softplus = nn.Softplus()
+        self.softmax = nn.Softmax(dim=-1)
+
+        self.layer1 = nn.Linear(input_dim, 256)
+
+        self.layer2 = nn.Linear(256, 128)
+
+        self.layer3 = nn.Linear(128, num_experts)
+
+    def forward(self, x):
+        x = self.flatten(x)
+        x = self.softplus(self.layer1(x))
+        x = self.drop(x)
+
+        x = self.softplus(self.layer2(x))
+        x = self.drop(x)
+
+        x = self.layer3(x)
+        x = self.softmax(x)
+
+        return x
+
+class MoE(nn.Module):
+    def __init__(self, trained_experts):
+        super(MoE, self).__init__()
+        self.experts = nn.ModuleList(trained_experts)
+        num_experts = len(trained_experts)
+        
+        # Assuming all experts have the same input dimension
+        input_dim = 1600
+        self.gating = Gating(input_dim, num_experts)
+
+    def forward(self, x):
+        # Get the weights from the gating network
+        weights = self.gating(x)
+  
+        # Calculate the expert outputs
+        outputs = torch.stack(
+           [expert(x) for expert in self.experts], dim=2)
+
+        # Adjust the weights tensor shape to match the expert outputs
+        weights = weights.unsqueeze(1).expand_as(outputs)
+
+        # Multiply the expert outputs with the weights and
+        # sum along the third dimension
+        return torch.sum(outputs * weights, dim=2)
+
+
+class NormedLinear(nn.Module):
+    def __init__(self,in_features,out_features):
+        super(NormedLinear, self).__init__()
+        self.weight = nn.Parameter(torch.Tensor(in_features, out_features))
+        self.weight.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
+    def forward(self, x):
+        return F.normalize(x,dim=1).mm(F.normalize(self.weight,dim=0))
+
+class EMGTLC(nn.Module):
+    def __init__(self, experts) -> None:
+        super().__init__()
+        self.experts = nn.ModuleList(experts)
+        self.num_experts = len(experts)
+        self.eta = 0.2
+    
+    def _normalize(self, x):
+        diff = torch.max(x, dim=1, keepdim=True)[0] - torch.min(x, dim=1, keepdim=True)[0]
+        return (x - torch.min(x, dim=1, keepdim=True)[0]) / (diff + 1e-9)
+
+    def forward(self, x):
+        outs = []
+        self.logits = outs
+        b0 = None
+        self.w = [torch.ones(len(x),dtype=torch.float,device=x.device)]
+
+        for i in range(self.num_experts):
+            xi = self.experts[i](x)
+            xi = self._normalize(xi)
+            outs.append(xi)
+
+            # evidential
+            alpha = torch.exp(xi)+1
+            S = alpha.sum(dim=1,keepdim=True)
+            b = (alpha-1)/S
+            u = xi.shape[1]/S.squeeze(-1)
+
+            # update w
+            if b0 is None:
+                C = 0
+            else:
+                bb = b0.view(-1,b0.shape[1],1)@b.view(-1,1,b.shape[1])
+                C = bb.sum(dim=[1,2])-bb.diagonal(dim1=1,dim2=2).sum(dim=1)
+            b0 = b
+            self.w.append(self.w[-1]*u/(1-C))
+            
+
+
+        # dynamic reweighting
+        exp_w = torch.stack(self.w) / self.eta
+        exp_w = torch.softmax(exp_w[:-1], dim=0)
+        self.w = exp_w
+        exp_w = exp_w.unsqueeze(-1)
+        # exp_w = [torch.exp(wi/self.eta) for wi in self.w]
+        # exp_w = [wi/wi.sum() for wi in exp_w]
+        # exp_w = [wi.unsqueeze(-1) for wi in exp_w]
+
+        reweighted_outs = [outs[i]*exp_w[i] for i in range(self.num_experts)]
+        return sum(reweighted_outs)
+
