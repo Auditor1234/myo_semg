@@ -5,7 +5,7 @@ import numpy as np
 from math import exp
 
 class TLCLoss(nn.Module):
-    def __init__(self, cls_num_list=None, max_m=0.5, tau=0.05):
+    def __init__(self, cls_num_list=None, max_m=0.5, tau=0.5):
         super(TLCLoss,self).__init__()
 
         m_list = 1./np.sqrt(np.sqrt(cls_num_list))
@@ -14,7 +14,7 @@ class TLCLoss(nn.Module):
         self.m_list = m_list
 
         # save diversity per_cls_weights
-        self.T = 100
+        self.T = 10000
         self.tau = tau
 
     def to(self,device):
@@ -58,6 +58,7 @@ class TLCLoss(nn.Module):
 
             # dynamic engagement
             w = extra_info['w'][i]
+            loss += l.sum() / len(l)
             w = torch.where(w>self.tau,True,False)
             if w.sum() != 0:
                 loss += (w*l).sum()/w.sum()

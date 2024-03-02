@@ -9,7 +9,7 @@ from loss import combine_loss
 
 
 
-def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y, evidential=False):
+def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y, loss_func=nn.CrossEntropyLoss()):
     train_X = torch.tensor(train_X, dtype=torch.float16)
     train_y = torch.tensor(train_y)
     val_X = torch.tensor(val_X, dtype=torch.float16)
@@ -34,10 +34,6 @@ def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y, evident
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device).half()
-    if evidential:
-        loss_func = combine_loss
-    else:
-        loss_func = nn.CrossEntropyLoss()
     optimizer = Adam(model.parameters(), lr=0.001, eps=1e-2)
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     # scheduler = None
@@ -74,7 +70,7 @@ def train_one_epoch(model, epoch, epochs, device, train_loader, loss_func, optim
         predict = model(x_data)
 
         labels = y_label.type(torch.long).to(device)
-        loss = loss_func(predict, labels)
+        loss = loss_func(predict, labels, epoch)
         total_loss += loss
 
         # backward
@@ -112,7 +108,7 @@ def validate(model, device, val_loader, loss_func):
         # loop.set_postfix(loss = loss.item())
     
     acc = round(100.0 * correct_nums.item() / total_nums, 6)
-    print("Validation total loss: %.6f," % (total_loss), "Accuracy: %.4f" % (acc) + '%\n')
+    print("Validation total loss: %.6f," % (total_loss), "Accuracy: %.4f" % (acc) + '%')
     return acc
 
 

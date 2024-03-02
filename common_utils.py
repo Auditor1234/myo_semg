@@ -29,7 +29,7 @@ def save_model_weight(model, filename='res/best.pt'):
         os.makedirs(filepath)
     
     torch.save(model.state_dict(), filename)
-    print('done')
+    print('save done')
 
 
 def save_results(file, result):

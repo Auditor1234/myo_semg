@@ -1,19 +1,23 @@
 import torch
+import copy
 import numpy as np
-from model import CNN, EMGViT, VCConcat, VCEnsemble, VCEvidential, MoE
+from baseline import TCN, ECNN
 from train import train
 import matplotlib.pyplot as plt
 from common_utils import setup_seed, data_label_shuffle
-from data_process import temporal_normal, load_movs_from_file, split_window_ration, load_emg_label_from_file, combine_movs
+from loss import edl_mse_loss
+
+from data_process import temporal_normal, load_movs_from_file, split_window_ration, tenfold_augmentation,\
+                            load_emg_label_from_file, combine_movs, normal2LT, labels_normal, uniform_distribute
 
 
 setup_seed(42)
-
 
 # subject 2, 6 classification accuracy exceed 80%
 subject = 1
 file_fmt = 'D:/Download/Datasets/Ninapro/DB2/DB2_s%d/S%d_E1_A1.mat'
 movements, labels = load_movs_from_file(file_fmt % (subject, subject))
+labels = labels_normal(labels)
 
 for i in range(len(movements)):
     movements[i] = np.array(movements[i])[:, :8]
@@ -29,57 +33,43 @@ for i in range(len(emg)):
     emg[i] = np.vstack(emg[i]) * 10000
     # emg[i] = temporal_normal(emg[i])
 
-# for i in range(len(emg)):
-#     plt.plot(emg[i][:, 0])
-#     plt.show()
-#     plt.cla()
+descend_idx = np.argsort([len(emg[i]) for i in range(len(emg))])[::-1]
+emg_temp = []
+for i in range(len(descend_idx)):
+    emg_temp.append(emg[descend_idx[i]])
+emg = emg_temp
     
 ratio = (4, 1, 1)
 window_size=200
 window_overlap=100
-x_train, y_train, x_val, y_val, test_x, y_test = split_window_ration(emg, labels, ratio=ratio, window_size=window_size, window_overlap=window_overlap)
+x_train, y_train, x_val, y_val, x_test, y_test = split_window_ration(emg, labels, ratio=ratio, window_size=window_size, window_overlap=window_overlap)
 
+x_train, y_train = normal2LT(x_train, y_train)
+x_val, y_val = uniform_distribute(x_val, y_val)
+x_test, y_test = uniform_distribute(x_test, y_test)
+
+x_train, y_train = tenfold_augmentation(x_train, y_train)
+x_val, y_val = tenfold_augmentation(x_val, y_val)
+x_test, y_test = tenfold_augmentation(x_test, y_test)
+
+print("train class labels = ", np.bincount(y_train))
+print("test class labels = ", np.bincount(y_test))
 # from data_process import awgn
-# for i in range(len(test_x)):
-#     test_x[i] = awgn(test_x[i], snr=20)
+# for i in range(len(x_test)):
+#     x_test[i] = awgn(x_test[i], snr=20)
 
 
-x_train = x_train[..., None].transpose((0, 3, 2, 1))
+x_train = x_train[..., None].transpose((0, 3, 2, 1)) # shape(N, 1, 8, 200)
 x_val = x_val[..., None].transpose((0, 3, 2, 1))
-test_x = test_x[..., None].transpose((0, 3, 2, 1))
+x_test = x_test[..., None].transpose((0, 3, 2, 1))
 
 x_train, y_train = data_label_shuffle(x_train, y_train)
 x_val, y_val = data_label_shuffle(x_val, y_val)
-test_x, y_test = data_label_shuffle(test_x, y_test)
-
-mix_subject = 2
-mix_ratio = 0.0
-
-# mix_movements, mix_labels = load_movs_from_file(file_fmt % (mix_subject, mix_subject))
-# for i in range(len(mix_movements)):
-#     mix_movements[i] = np.array(mix_movements[i])[:, :8]
-# for i in range(len(mix_movements)):
-#     mov_len = len(mix_movements[i])
-#     mix_movements[i] = mix_movements[i][int(0.25 * mov_len) : int(0.75 * mov_len)]
-# mix_x, mix_y = combine_movs(mix_movements, mix_labels, classes)
-# for i in range(len(mix_x)):
-#     mix_x[i] = np.vstack(mix_x[i])
-
-mix_x, mix_y = load_emg_label_from_file(file_fmt % (mix_subject, mix_subject))
-for i in range(len(mix_x)):
-    mix_x[i] = np.array(mix_x[i])[:, :8] * 10000
-    mix_x[i] = temporal_normal(mix_x[i])
-_, _, _, _, mix_x, mix_y = split_window_ration(mix_x, mix_y, ratio=ratio, window_size=window_size, window_overlap=window_overlap)
-mix_x = mix_x[..., None].transpose((0, 3, 2, 1))
-mix_x, mix_y = data_label_shuffle(mix_x, mix_y)
-mix_num = int(mix_ratio * len(test_x))
-for i in range(mix_num):
-    test_x[i] = mix_x[i]
-    y_test[i] = mix_y[i] - 1
+x_test, y_test = data_label_shuffle(x_test, y_test)
 
 epochs = 60
-model_type = 0
-models = [EMGViT, CNN, VCConcat, VCEvidential, VCEnsemble]
-model = models[model_type](classes)
-
-train(model, epochs, x_train, y_train, x_val, y_val, test_x, y_test, evidential=(model_type == 3))
+baselines = [TCN, ECNN]
+model = baselines[1]
+print(f'-------{model.__name__}-------')
+model = model(classes)
+train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, loss_func=edl_mse_loss)
