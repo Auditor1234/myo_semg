@@ -5,7 +5,7 @@ from baseline import TCN, ECNN
 from train import train
 import matplotlib.pyplot as plt
 from common_utils import setup_seed, data_label_shuffle
-from loss import edl_mse_loss
+from loss import edl_mse_loss, cross_entropy
 
 from data_process import temporal_normal, load_movs_from_file, split_window_ration, tenfold_augmentation,\
                             load_emg_label_from_file, combine_movs, normal2LT, labels_normal, uniform_distribute
@@ -44,7 +44,7 @@ window_size=200
 window_overlap=100
 x_train, y_train, x_val, y_val, x_test, y_test = split_window_ration(emg, labels, ratio=ratio, window_size=window_size, window_overlap=window_overlap)
 
-x_train, y_train = normal2LT(x_train, y_train)
+# x_train, y_train = normal2LT(x_train, y_train)
 x_val, y_val = uniform_distribute(x_val, y_val)
 x_test, y_test = uniform_distribute(x_test, y_test)
 
@@ -68,8 +68,11 @@ x_val, y_val = data_label_shuffle(x_val, y_val)
 x_test, y_test = data_label_shuffle(x_test, y_test)
 
 epochs = 60
+model_index = 1
 baselines = [TCN, ECNN]
-model = baselines[1]
+model = baselines[model_index]
 print(f'-------{model.__name__}-------')
 model = model(classes)
-train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, loss_func=edl_mse_loss)
+
+loss_func = edl_mse_loss if model_index == 1 else cross_entropy
+train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, loss_func=loss_func)

@@ -1,9 +1,9 @@
 import torch
 import torch.nn.functional as F
 from sklearn.metrics import *
-from scipy import interpolate
+from utils import plot_confusion_matrix
 
-def ACC(output, target, u=None, region_len=100/3):
+def ACC(output, target, u=None, region_len=100/3, save=False, subject=1, file=None):
     with torch.no_grad():
         pred = torch.argmax(output,dim=1)
         correct = (pred==target)
@@ -32,4 +32,8 @@ def ACC(output, target, u=None, region_len=100/3):
     print('\t head \t =',split_acc[0])
     print('\t med \t =',split_acc[1])
     print('\t tail \t =',split_acc[2])
-    return acc, region_acc, split_acc[0], split_acc[1], split_acc[2]
+
+    if save and file:
+        plot_confusion_matrix(target.cpu().numpy(), pred.cpu().numpy(), 's%d' % subject, file=file)
+            
+    return acc

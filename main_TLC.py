@@ -30,7 +30,7 @@ emg, labels = combine_movs(movements, labels, classes)
 
 for i in range(len(emg)):
     emg[i] = np.vstack(emg[i]) * 10000
-    emg[i] = temporal_normal(emg[i])
+    # emg[i] = temporal_normal(emg[i])
 
 descend_idx = np.argsort([len(emg[i]) for i in range(len(emg))])[::-1]
 emg_temp = []
@@ -58,7 +58,7 @@ print("test class labels = ", np.bincount(y_test))
 #     x_test[i] = awgn(x_test[i], snr=20)
 
 
-x_train = x_train[..., None].transpose((0, 3, 2, 1))
+x_train = x_train[..., None].transpose((0, 3, 2, 1)) # shape(N, 1, 8, 200)
 x_val = x_val[..., None].transpose((0, 3, 2, 1))
 x_test = x_test[..., None].transpose((0, 3, 2, 1))
 
@@ -67,8 +67,8 @@ x_val, y_val = data_label_shuffle(x_val, y_val)
 x_test, y_test = data_label_shuffle(x_test, y_test)
 
 epochs = 60
-num_experts = 6
-expert = EMGViT
+num_experts = 1
+expert = CNN
 print(f'-------{num_experts} {expert.__name__}-------')
 base_model = expert(classes)
 model = EMGTLC(

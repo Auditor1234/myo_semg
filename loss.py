@@ -92,10 +92,7 @@ def combine_loss(evidences, y, epoch_num=10, classes=10):
 
 
 def cross_entropy(predictions, y, epoch_num=10, classes=10):
-    B = y.shape[0]
-    norm_predictions = torch.softmax(predictions, dim=1)
-    log_res = torch.log(norm_predictions[torch.arange(B), y])
-    return torch.sum(-log_res) / B
+    return F.cross_entropy(predictions, y)
 
 
 def edl_mse_loss(output, target, epoch_num=10, classes=10, ecnn_type=2):
@@ -107,8 +104,7 @@ def edl_mse_loss(output, target, epoch_num=10, classes=10, ecnn_type=2):
         beta = torch.ones([1, classes], dtype=torch.float32, device=device)
         S_alpha = torch.sum(alpha, dim=1, keepdim=True)
         S_beta = torch.sum(beta, dim=1, keepdim=True)
-        lnB = torch.lgamma(S_alpha) - \
-            torch.sum(torch.lgamma(alpha), dim=1, keepdim=True)
+        lnB = torch.lgamma(S_alpha) - torch.sum(torch.lgamma(alpha), dim=1, keepdim=True)
         lnB_uni = torch.sum(torch.lgamma(beta), dim=1,
                             keepdim=True) - torch.lgamma(S_beta)
 

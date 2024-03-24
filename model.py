@@ -11,10 +11,10 @@ class CNN(nn.Module):
     def __init__(self, classes=10, features=False) -> None:
         super().__init__()
         self.features = features
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=(3,19), padding=(1,9))
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=(3,19), padding=(1,9)) # shape(B,32,8,200)
         self.pool1 = nn.MaxPool2d((1,10), stride=(1,10)) # shape(B,32,8,20)
 
-        self.conv2 = nn.Conv2d(32, 32, kernel_size=(3,3), padding=1)
+        self.conv2 = nn.Conv2d(32, 32, kernel_size=(3,3), padding=1) # shape(B,32,8,20)
         self.pool2 = nn.MaxPool2d((4,4), stride=(4,4)) # shape(B,32,2,5)
 
         self.relu = nn.ReLU()
@@ -285,8 +285,9 @@ class NormedLinear(nn.Module):
 class EMGTLC(nn.Module):
     def __init__(self, experts) -> None:
         super().__init__()
-        self.experts = nn.ModuleList(experts)
         self.num_experts = len(experts)
+        self.experts = nn.ModuleList(experts)
+        # self.attentions = nn.ModuleList([SpatialAttention() for _ in range(self.num_experts)])
         self.eta = 0.2
     
     def _normalize(self, x):
@@ -333,3 +334,120 @@ class EMGTLC(nn.Module):
         reweighted_outs = [outs[i]*exp_w[i] for i in range(self.num_experts)]
         return sum(reweighted_outs)
 
+
+class EMGAttentionPool2d(nn.Module):
+    def __init__(self, spacial_dim: int, embed_dim: int, num_heads: int, output_dim: int = None):
+        super().__init__()
+        self.positional_embedding = nn.Parameter(torch.randn(spacial_dim + 1, embed_dim) / embed_dim ** 0.5)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.c_proj = nn.Linear(embed_dim, output_dim or embed_dim)
+        self.num_heads = num_heads
+
+    def forward(self, x):
+        # x.shape(B,32,2,5)
+        x = x.flatten(start_dim=2).permute(2, 0, 1)  # NCHW -> (HW)NC
+        x = torch.cat([x.mean(dim=0, keepdim=True), x], dim=0)  # (HW+1)NC
+        x = x + self.positional_embedding[:, None, :].to(x.dtype)  # (HW+1)NC
+        x, _ = F.multi_head_attention_forward(
+            query=x[:1], key=x, value=x,
+            embed_dim_to_check=x.shape[-1],
+            num_heads=self.num_heads,
+            q_proj_weight=self.q_proj.weight,
+            k_proj_weight=self.k_proj.weight,
+            v_proj_weight=self.v_proj.weight,
+            in_proj_weight=None,
+            in_proj_bias=torch.cat([self.q_proj.bias, self.k_proj.bias, self.v_proj.bias]),
+            bias_k=None,
+            bias_v=None,
+            add_zero_attn=False,
+            dropout_p=0,
+            out_proj_weight=self.c_proj.weight,
+            out_proj_bias=self.c_proj.bias,
+            use_separate_proj_weight=True,
+            training=self.training,
+            need_weights=False
+        ) # shape(1,16,2048)
+        return x.squeeze(0)
+
+
+
+class CNN2DEncoder(nn.Module):
+    def __init__(self, classes=10, kernel_size=3):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=(kernel_size, 5)), # shape(B,32,14,46)
+            nn.BatchNorm2d(32),
+            nn.PReLU(32),
+            nn.Dropout2d(),
+            # nn.MaxPool2d(kernel_size=(1, 3)),
+            nn.AvgPool2d(kernel_size=(1, 3)), # shape(B,32,16,15)
+            nn.Conv2d(32, 64, kernel_size=(kernel_size, 5)), # shape(B,64,12,11)
+            nn.BatchNorm2d(64),
+            nn.PReLU(64),
+            nn.Dropout2d(),
+            # nn.MaxPool2d(kernel_size=(1, 3)),
+            nn.AvgPool2d(kernel_size=(1, 3)), # shape(B,64,12,3)
+            nn.Flatten(),
+        )
+
+        self.fc = nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(64*12*3, 512),
+            nn.ReLU(),
+            nn.Linear(512, 64),
+            nn.ReLU(),
+            nn.Linear(64, classes),
+        )
+
+    def forward(self, input):
+        """
+        shape: (N, C, L)
+        """
+        return self.fc(self.net(input.unsqueeze(1)))
+    
+
+class ViTEncoder(nn.Module):
+    # input shape(B,1,8,200)
+    def __init__(self, output_dim, width=64, layers=1, heads=32, features=False):
+        super().__init__()
+        self.features = features
+        self.output_dim = output_dim
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=width, kernel_size=(16, 2), stride=(16, 2), bias=False)
+
+        scale = width ** -0.5 # 0.2
+        self.class_embedding = nn.Parameter(scale * torch.randn(width))
+        self.positional_embedding = nn.Parameter(scale * torch.randn((25) + 1, width))
+        self.ln_pre = LayerNorm(width)
+
+        self.transformer = Transformer(width, layers, heads)
+
+        self.ln_post = LayerNorm(width)
+        self.proj = nn.Parameter(scale * torch.randn(width, output_dim))
+        self.softplus = nn.Softplus()
+
+    def forward(self, x: torch.Tensor):
+        x = x.unsqueeze(1)
+        # shape(B,1,8,50)
+        x = self.conv1(x)  # shape(B,width,1,25)
+        x = x.reshape(x.shape[0], x.shape[1], -1)  # shape(B,width,25)
+        x = x.permute(0, 2, 1)  # shape(B,25,width)
+        x = torch.cat([self.class_embedding.to(x.dtype) + torch.zeros(x.shape[0], 1, x.shape[-1], dtype=x.dtype, device=x.device), x], dim=1)  # shape(B,25 + 1,width)
+        x = x + self.positional_embedding.to(x.dtype) # shape(B,26,width)
+        x = self.ln_pre(x) # shape(B,26,width)
+
+        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = self.transformer(x) # shape(26,B,width)
+        x = x.permute(1, 0, 2)  # LND -> NLD
+
+        x = self.ln_post(x[:, 0, :]) # shape(B,width)
+
+        if self.features:
+            return x
+
+        if self.proj is not None:
+            x = x @ self.proj
+            x = self.softplus(x)
+
+        return x # shape(1,512)

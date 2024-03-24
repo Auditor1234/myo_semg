@@ -1,10 +1,13 @@
 import h5py
 import math
 import glob
+import torch
 import numpy as np
 import scipy.io as scio
 from feature_utils import *
 from scipy.signal import butter, sosfilt, filtfilt
+from pathlib import Path
+from numpy.random import pareto
 
 
 def load_emg_label_from_dir(file):
@@ -380,17 +383,17 @@ def awgn(x, snr):
     noise = np.random.randn(x.shape[0], x.shape[1]) * np.sqrt(npower)
     return x + noise
 
-def normal2LT(emg, labels):
+def normal2LT(emg, labels, mu=0.65):
     """
     construct long-tailed data
     """
-    label_type = np.unique(labels)
-    emg_type = [[] for _ in range(len(label_type))]
+    label_bins = np.bincount(labels)
+    emg_type = [[] for _ in range(len(label_bins))]
     for i in range(len(labels)):
         emg_type[labels[i]].append(emg[i])
     
-    max_num = len(emg_type[0])
-    LT_ratio = [1 / i for i in range(1, len(label_type) + 1)]
+    max_num = max(label_bins)
+    LT_ratio = [mu ** i for i in range(0, len(label_bins))]
 
     labels_out = []
     emg_out = []
@@ -433,3 +436,38 @@ def tenfold_augmentation(emg, labels):
     emg = np.repeat(emg, repeats=10, axis=0)
     labels = np.repeat(labels, repeats=10, axis=0)
     return emg, labels
+
+
+def sliding_window(arr, window_length, stride):
+    shape = (window_length, *arr.shape[1:])
+    return np.lib.stride_tricks.sliding_window_view(arr, shape)[::stride].squeeze()
+
+def prepare_data(input_dir, output_dir, exercise, subjects, classes, repetitions, window_length, stride):
+    for s in subjects:
+        path = Path(f'{output_dir}/s{s}')
+        path.mkdir(parents=True, exist_ok=True)
+        
+        datamat = scio.loadmat(f'{input_dir}/s{s}/S{s}_E{exercise}_A1.mat')
+        raw_emg, raw_label, repetition = datamat['emg'], datamat['restimulus'], datamat['rerepetition'] 
+        for rep in repetitions:
+            emg = []
+            for c in classes:
+                mask = ((raw_label == c) & (repetition == rep)).flatten()
+                rep_emg = raw_emg[mask]
+                emg.append(sliding_window(rep_emg, window_length, stride))
+            label = np.repeat(classes, [x.shape[0] for x in emg]) - 1
+            emg = np.concatenate(emg)
+            torch.save({
+                'emg': emg,
+                'label': label
+            }, path / f'repetition{rep}.pt', pickle_protocol=5)
+
+def filter_labels(emg, labels, ignore_list):
+    emg_temp = []
+    labels_temp = []
+    for i in range(len(labels)):
+        if labels[i] in ignore_list:
+            continue
+        emg_temp.append(emg[i])
+        labels_temp.append(labels[i])
+    return np.array(emg_temp), labels_normal(np.array(labels_temp))

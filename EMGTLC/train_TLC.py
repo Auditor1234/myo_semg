@@ -11,7 +11,7 @@ import numpy as np
 
 
 
-def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y):
+def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y, subject, file):
     train_X = torch.tensor(train_X, dtype=torch.float16)
     train_y = torch.tensor(train_y)
     val_X = torch.tensor(val_X, dtype=torch.float16)
@@ -52,13 +52,13 @@ def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y):
         current_precision = valid_epoch(model, epoch, device, eval_loader, num_class)
         acc.append(current_precision)
 
-        # if current_precision >= best_precision:
-        #     best_precision = current_precision
-        #     save_model_weight(model=model, filename=weight_path)
+        if current_precision >= best_precision:
+            best_precision = current_precision
+            save_model_weight(model=model, filename=weight_path)
     
-    print('\nCurrent best precision in val set is: %.4f' % (best_precision) + '%')
-    # model.load_state_dict(torch.load(weight_path))
-    acc = valid_epoch(model, epoch, device, test_loader, num_class)
+    print('\nCurrent best precision in val set is: %.4f' % (best_precision * 100) + '%')
+    model.load_state_dict(torch.load(weight_path))
+    acc = valid_epoch(model, epoch, device, test_loader, num_class, save=True, subject=subject, file=file)
 
     return model, acc
 
@@ -89,7 +89,7 @@ def train_epoch(model, epoch, device, train_loader, loss_func, optimizer, schedu
     return batch_loss
 
 
-def valid_epoch(model, epoch, device, val_loader, num_class):
+def valid_epoch(model, epoch, device, val_loader, num_class, save=False, subject=1, file='confusion_matrix.png'):
     model.eval()
     output = torch.empty(0, num_class, dtype=torch.float32, device=device)
     uncertainty = torch.empty(0, dtype=torch.float32, device=device)
@@ -104,4 +104,4 @@ def valid_epoch(model, epoch, device, val_loader, num_class):
         val_targets.append(target)
     val_targets = torch.cat(val_targets, dim=0).to(device)
     print(f'================ Epoch: {epoch:03d} ================')
-    ACC(output, val_targets, uncertainty, region_len=num_class/3)
+    return ACC(output, val_targets, uncertainty, region_len=num_class/3, save=save, subject=subject, file=file)
