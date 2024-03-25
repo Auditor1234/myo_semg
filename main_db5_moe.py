@@ -1,9 +1,8 @@
 import torch
 import copy
 import numpy as np
-from model import CNN2DEncoder, EMGTLC, ViTEncoder
-from EMGTLC.train_TLC import train
-import matplotlib.pyplot as plt
+from model import CNN2DEncoder, EMGTLC, ViTEncoder, MoE5, MoE5FC
+from train import train
 from common_utils import setup_seed, data_label_shuffle
 from loss import cross_entropy
 
@@ -21,7 +20,7 @@ val_rep = [5]
 test_rep = [6]
 ignore_list = [0, 6]
 epochs = 60
-num_experts = 2
+num_experts = 4
 classes = 10
 expert = CNN2DEncoder
 save_file = 'res/img/s%d_%dexpert.png' % (subjects[0], num_experts)
@@ -52,8 +51,10 @@ x_test, y_test = data_label_shuffle(x_test, y_test)
 
 print(f'-------{num_experts} {expert.__name__}-------')
 base_model = expert(classes)
-model = EMGTLC(
-    [copy.deepcopy(base_model) for _ in range(num_experts)]
-)
+# models = [copy.deepcopy(base_model) for _ in range(num_experts)]
+models = [CNN2DEncoder(classes), ViTEncoder(classes), CNN2DEncoder(classes)]
 
-train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, subjects[0], file=save_file)
+# model = MoE5(models)
+model = CNN2DEncoder(classes)
+# model = MoE5FC(classes, num_experts)
+train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, loss_func=cross_entropy)

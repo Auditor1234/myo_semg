@@ -255,7 +255,7 @@ class MoE(nn.Module):
         num_experts = len(trained_experts)
         
         # Assuming all experts have the same input dimension
-        input_dim = 1600
+        input_dim = 16 * 50
         self.gating = Gating(input_dim, num_experts)
 
     def forward(self, x):
@@ -268,6 +268,45 @@ class MoE(nn.Module):
 
         # Adjust the weights tensor shape to match the expert outputs
         weights = weights.unsqueeze(1).expand_as(outputs)
+
+        # Multiply the expert outputs with the weights and
+        # sum along the third dimension
+        return torch.sum(outputs * weights, dim=2)
+
+
+class MoE5(nn.Module):
+    def __init__(self, trained_experts):
+        super(MoE5, self).__init__()
+        self.experts = nn.ModuleList(trained_experts)
+        self.num_experts = len(trained_experts)
+        
+        # shape(B,1,16,50)
+        self.block = nn.Sequential(
+            nn.Conv2d(1, 16, (3,11)), # shape(B,16,14,40)
+            nn.BatchNorm2d(16),
+            nn.ReLU(),
+            nn.MaxPool2d((2, 8)),
+            nn.Dropout2d(),
+            # shape(B,16,7,5)
+            nn.Flatten(),
+            # shape(B,16*7*5)
+            nn.Linear(16*7*5, self.num_experts),
+            nn.Softmax(dim=-1)
+        )
+        self.sampler = torch.distributions.normal.Normal(0, 1)
+        self.weights = nn.Parameter(torch.ones(self.num_experts))
+
+    def forward(self, x):
+        # Get the weights from the gating network
+        # weights = self.block(x.unsqueeze(1))
+  
+        # Calculate the expert outputs
+        outputs = torch.stack(
+           [expert(x) for expert in self.experts], dim=2)
+
+        # Adjust the weights tensor shape to match the expert outputs
+        weights = torch.softmax(self.weights, dim=-1)
+        weights = weights.view(1, 1, -1).expand_as(outputs)
 
         # Multiply the expert outputs with the weights and
         # sum along the third dimension
@@ -291,14 +330,16 @@ class EMGTLC(nn.Module):
         self.eta = 0.2
     
     def _normalize(self, x):
-        diff = torch.max(x, dim=1, keepdim=True)[0] - torch.min(x, dim=1, keepdim=True)[0]
-        return (x - torch.min(x, dim=1, keepdim=True)[0]) / (diff + 1e-9)
+        # diff = torch.max(x, dim=1, keepdim=True)[0] - torch.min(x, dim=1, keepdim=True)[0]
+        # return (x - torch.min(x, dim=1, keepdim=True)[0]) / (diff + 1e-9)
+        return F.normalize(x, dim=1)
 
     def forward(self, x):
         outs = []
         self.logits = outs
         b0 = None
         self.w = [torch.ones(len(x),dtype=torch.float,device=x.device)]
+        self.save_info = []
 
         for i in range(self.num_experts):
             xi = self.experts[i](x)
@@ -310,6 +351,7 @@ class EMGTLC(nn.Module):
             S = alpha.sum(dim=1,keepdim=True)
             b = (alpha-1)/S
             u = xi.shape[1]/S.squeeze(-1)
+            self.save_info.append(torch.cat([b, u.unsqueeze(1)], dim=1))
 
             # update w
             if b0 is None:
@@ -325,7 +367,7 @@ class EMGTLC(nn.Module):
         # dynamic reweighting
         exp_w = torch.stack(self.w) / self.eta
         exp_w = torch.softmax(exp_w[:-1], dim=0)
-        self.w = exp_w
+        # self.w = exp_w
         exp_w = exp_w.unsqueeze(-1)
         # exp_w = [torch.exp(wi/self.eta) for wi in self.w]
         # exp_w = [wi/wi.sum() for wi in exp_w]
@@ -409,7 +451,7 @@ class CNN2DEncoder(nn.Module):
     
 
 class ViTEncoder(nn.Module):
-    # input shape(B,1,8,200)
+    # input shape(B,1,16,50)
     def __init__(self, output_dim, width=64, layers=1, heads=32, features=False):
         super().__init__()
         self.features = features
@@ -451,3 +493,49 @@ class ViTEncoder(nn.Module):
             x = self.softplus(x)
 
         return x # shape(1,512)
+
+
+class MoE5FC(nn.Module):
+    def __init__(self, classes, num_experts=1):
+        super(MoE5FC, self).__init__()
+        self.num_experts = num_experts
+        
+        # shape(B,1,16,50)
+        self.backbone = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=(3, 5)), # shape(B,32,14,46)
+            nn.BatchNorm2d(32),
+            nn.PReLU(32),
+            nn.Dropout2d(),
+            # nn.MaxPool2d(kernel_size=(1, 3)),
+            nn.AvgPool2d(kernel_size=(1, 3)), # shape(B,32,16,15)
+            nn.Conv2d(32, 64, kernel_size=(3, 5)), # shape(B,64,12,11)
+            nn.BatchNorm2d(64),
+            nn.PReLU(64),
+            nn.Dropout2d(),
+            # nn.MaxPool2d(kernel_size=(1, 3)),
+            nn.AvgPool2d(kernel_size=(1, 3)), # shape(B,64,12,3)
+            nn.Flatten(),
+        )
+        self.fc = nn.ModuleList([self.make_fc(classes) for _ in range(self.num_experts)])
+
+    def make_fc(self, out_features):
+        return nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(64*12*3, 512),
+            nn.Dropout(),
+            nn.ReLU(),
+            nn.Linear(512, 64),
+            nn.Dropout(),
+            nn.ReLU(),
+            nn.Linear(64, out_features),
+        )
+
+    def forward(self, x):
+        x = self.backbone(x.unsqueeze(1))
+  
+        # Calculate the expert outputs
+        outputs = torch.stack([fc(x) for fc in self.fc], dim=2)
+
+        # Multiply the expert outputs with the weights and
+        # sum along the third dimension
+        return torch.mean(outputs, dim=2)

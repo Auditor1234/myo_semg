@@ -471,3 +471,15 @@ def filter_labels(emg, labels, ignore_list):
         emg_temp.append(emg[i])
         labels_temp.append(labels[i])
     return np.array(emg_temp), labels_normal(np.array(labels_temp))
+
+def load_emg_label(repetitions, file_fmt, subjects, ignore_list):
+    x, y = [], []
+    for subject in subjects:
+        for rep in repetitions:
+            data = torch.load(file_fmt % (subject, rep))
+            rep_emg = data['emg']
+            rep_label = data['label']
+            for i in range(len(rep_label)):
+                x.append(rep_emg[i])
+                y.append(rep_label[i])
+    return filter_labels(x, y, ignore_list)

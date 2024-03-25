@@ -58,7 +58,7 @@ def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y, subject
     
     print('\nCurrent best precision in val set is: %.4f' % (best_precision * 100) + '%')
     model.load_state_dict(torch.load(weight_path))
-    acc = valid_epoch(model, epoch, device, test_loader, num_class, save=True, subject=subject, file=file)
+    acc = valid_epoch(model, epoch, device, test_loader, num_class, save=False, subject=subject, file=file)
 
     return model, acc
 
@@ -94,14 +94,19 @@ def valid_epoch(model, epoch, device, val_loader, num_class, save=False, subject
     output = torch.empty(0, num_class, dtype=torch.float32, device=device)
     uncertainty = torch.empty(0, dtype=torch.float32, device=device)
     val_targets = []
+    num_experts = model.num_experts
+    save_info = [torch.empty(0, dtype=torch.float32, device=device) for _ in range(num_experts)]
     for _, (data, target) in enumerate(val_loader):
         data = data.to(device)
         with torch.no_grad():
             o = model(data)
             u = model.w[-1]
+        expert_info = model.save_info
         output = torch.cat([output, o.detach()],dim=0)
         uncertainty = torch.cat([uncertainty, u.detach()], dim=0)
         val_targets.append(target)
+        for i in range(num_experts):
+            save_info[i] = torch.cat([save_info[i], expert_info[i]], dim=0)
     val_targets = torch.cat(val_targets, dim=0).to(device)
     print(f'================ Epoch: {epoch:03d} ================')
-    return ACC(output, val_targets, uncertainty, region_len=num_class/3, save=save, subject=subject, file=file)
+    return ACC(output, val_targets, uncertainty, region_len=num_class/3, save=save, subject=subject, file=file, save_info=save_info)

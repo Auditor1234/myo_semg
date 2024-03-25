@@ -1,9 +1,9 @@
 import torch
 import torch.nn.functional as F
-from sklearn.metrics import *
+import numpy as np
 from utils import plot_confusion_matrix
 
-def ACC(output, target, u=None, region_len=100/3, save=False, subject=1, file=None):
+def ACC(output, target, u=None, region_len=100/3, save=False, subject=1, file=None, save_info=[]):
     with torch.no_grad():
         pred = torch.argmax(output,dim=1)
         correct = (pred==target)
@@ -35,5 +35,9 @@ def ACC(output, target, u=None, region_len=100/3, save=False, subject=1, file=No
 
     if save and file:
         plot_confusion_matrix(target.cpu().numpy(), pred.cpu().numpy(), 's%d' % subject, file=file)
-            
+        num_experts = len(save_info)
+        for i in range(num_experts):
+            save_info[i] = torch.cat([save_info[i], u.unsqueeze(1), pred.unsqueeze(1), target.unsqueeze(1)], dim=1)
+            np.savetxt("res/csv/s%d_expert%din%d_info.csv" % (subject, i, num_experts), save_info[i].cpu().numpy(), delimiter="," ,fmt="%.4f")
+
     return acc
