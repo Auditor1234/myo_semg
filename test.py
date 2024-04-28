@@ -14,7 +14,14 @@ from numpy.random import pareto
 # plt.show()
 # print('hello')
 # print(hist2 * max(labels))
-a = torch.arange(24).reshape(2, 4, 3)
-b = torch.arange(12).reshape(1, 4, 3)
-print(torch.cat([a, b, torch.empty(0)], dim=0).shape)
-print(a[:, 0].shape)
+# a = torch.arange(24).reshape(2, 4, 3)
+# b = torch.arange(12).reshape(1, 4, 3)
+# print(torch.cat([a, b, torch.empty(0)], dim=0).shape)
+# c = a.shape[1:]
+# d = np.random.rand(*c)
+# print(*a.shape)
+# print(d)
+
+mu = 0.95
+LT_ratio = np.array([mu ** i for i in range(200)]) * 100000
+np.savetxt('res/csv/long_tail.csv', LT_ratio, delimiter=',', fmt="%.6f")

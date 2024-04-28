@@ -183,3 +183,38 @@ class ECNN(nn.Module):
             self._fc_prelu2(self._fc_batch_norm2(self._fc2(fc1))))
         output = self._output(fc2)
         return output
+
+
+class CNN2DEncoder(nn.Module):
+    def __init__(self, classes=10, kernel_size=3, dropout=0.2):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=(kernel_size, 5)), # shape(B,32,14,46)
+            nn.BatchNorm2d(32),
+            nn.PReLU(32),
+            nn.Dropout2d(dropout),
+            # nn.MaxPool2d(kernel_size=(1, 3)),
+            nn.AvgPool2d(kernel_size=(1, 3)), # shape(B,32,16,15)
+            nn.Conv2d(32, 64, kernel_size=(kernel_size, 5)), # shape(B,64,12,11)
+            nn.BatchNorm2d(64),
+            nn.PReLU(64),
+            nn.Dropout2d(dropout),
+            # nn.MaxPool2d(kernel_size=(1, 3)),
+            nn.AvgPool2d(kernel_size=(1, 3)), # shape(B,64,12,3)
+            nn.Flatten(),
+        )
+
+        self.fc = nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(64*12*3, 512),
+            nn.ReLU(),
+            nn.Linear(512, 64),
+            nn.ReLU(),
+            nn.Linear(64, classes),
+        )
+
+    def forward(self, input):
+        """
+        shape: (N, C, L)
+        """
+        return self.fc(self.net(input.unsqueeze(1)))

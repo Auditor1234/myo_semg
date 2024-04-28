@@ -427,7 +427,7 @@ def uniform_distribute(emg, labels):
         if len(emg_temp[labels[i]]) < min_nums:
             emg_temp[labels[i]].append(emg[i])
             labels_temp.append(labels[i])
-    return np.array(emg_temp).reshape((-1, emg.shape[1], emg.shape[2])), np.array(labels_temp)
+    return np.array(emg_temp).reshape((-1, *emg.shape[1:])), np.array(labels_temp)
     
 def tenfold_augmentation(emg, labels):
     """

@@ -1,29 +1,35 @@
 import torch
 import copy
 import numpy as np
-from model import EMGTLC, ViTEncoder, MoE5, MoE5FC, EMGBranchNaive
+from functools import partial
+from baseline import TCN, ECNN, CNN2DEncoder
 from train import train
+import matplotlib.pyplot as plt
 from common_utils import setup_seed, data_label_shuffle
-from loss import cross_entropy, FuseLoss
+from loss import edl_mse_loss, cross_entropy
 
-from data_process import load_emg_label, filter_labels,\
-                            min_max_normal, normal2LT, labels_normal, uniform_distribute, normal2LT
+from data_process import load_emg_label, normal2LT, uniform_distribute
 
 
 setup_seed(0)
 
+
 file_fmt = 'datasets/DB5/s%d/repetition%d.pt'
-subjects = [3]
+subjects = [1]
 long_tail = True
 train_rep = [1, 2, 3, 4]
 val_rep = [5]
 test_rep = [6]
 ignore_list = []
 epochs = 60
-num_experts = 4
+num_experts = 1
 classes = 12
-# save_file = 'res/img/12_s%d_%dexpert.png' % (subjects[0], num_experts)
-save_file = None
+model_index = 1
+baselines = [TCN, CNN2DEncoder]
+model = baselines[model_index]
+# loss_func =  partial(edl_mse_loss, classes=classes, ecnn_type=3) # edl_mse_loss
+loss_func = cross_entropy
+save_file = 'res/img/s%d_%dexpert.png' % (subjects[0], num_experts)
 
 x_train, y_train = load_emg_label(train_rep, file_fmt, subjects, ignore_list)
 x_val, y_val = load_emg_label(val_rep, file_fmt, subjects, ignore_list)
@@ -48,13 +54,7 @@ x_train, y_train = data_label_shuffle(x_train, y_train)
 x_val, y_val = data_label_shuffle(x_val, y_val)
 x_test, y_test = data_label_shuffle(x_test, y_test)
 
+print(f'-------{model.__name__}-------')
+model = model(classes)
 
-
-# model = MoE5(models)
-model = EMGBranchNaive(classes, num_experts)
-# model = MoE5FC(classes, num_experts, np.bincount(y_train))
-print(f'-------{num_experts} {model.__class__.__name__}-------')
-
-loss_func = FuseLoss(np.bincount(y_train))
-# loss_func = cross_entropy
-train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, loss_func=loss_func, subject=subjects[0], file=save_file)
+train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, loss_func=loss_func)

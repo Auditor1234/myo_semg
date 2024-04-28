@@ -64,6 +64,7 @@ def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y, subject
 
 def train_epoch(model, epoch, device, train_loader, loss_func, optimizer, scheduler):
     model.train()
+    loss_func._hook_before_epoch(epoch)
     total_loss = []
     for _, (data, target) in tqdm(enumerate(train_loader)):
         data, target = data.to(device), target.to(device)

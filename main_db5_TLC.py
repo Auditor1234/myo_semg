@@ -1,7 +1,7 @@
 import torch
 import copy
 import numpy as np
-from model import CNN2DEncoder, EMGTLC, ViTEncoder
+from model import CNN2DEncoder, EMGTLC, EMGBranch
 from EMGTLC.train_TLC import train
 import matplotlib.pyplot as plt
 from common_utils import setup_seed, data_label_shuffle
@@ -19,10 +19,10 @@ long_tail = True
 train_rep = [1, 2, 3, 4]
 val_rep = [5]
 test_rep = [6]
-ignore_list = [0, 6]
+ignore_list = []
 epochs = 60
-num_experts = 2
-classes = 10
+num_experts = 1
+classes = 12
 expert = CNN2DEncoder
 save_file = 'res/img/s%d_%dexpert.png' % (subjects[0], num_experts)
 
@@ -52,8 +52,9 @@ x_test, y_test = data_label_shuffle(x_test, y_test)
 
 print(f'-------{num_experts} {expert.__name__}-------')
 base_model = expert(classes)
-model = EMGTLC(
-    [copy.deepcopy(base_model) for _ in range(num_experts)]
-)
+# model = EMGTLC(
+#     [base_model for _ in range(num_experts)]
+# )
+model = EMGBranch(classes, num_experts)
 
 train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, subjects[0], file=save_file)

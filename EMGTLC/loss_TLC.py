@@ -6,29 +6,54 @@ from math import exp
 from torch.distributions import normal, dirichlet
 
 class TLCLoss(nn.Module):
-    def __init__(self, cls_num_list=None, max_m=0.5, tau=0.5, sigma=0.01):
+    def __init__(self, cls_num_list=None, max_m=0.5, reweight_epoch=20, reweight_factor=0.05, annealing=300, tau=0.45):
         super(TLCLoss,self).__init__()
+        self.reweight_epoch = reweight_epoch
 
         m_list = 1./np.sqrt(np.sqrt(cls_num_list))
         m_list = m_list*(max_m/np.max(m_list))
         m_list = torch.tensor(m_list, dtype=torch.float, requires_grad=False)
         self.m_list = m_list
 
-        cls_num_list = torch.tensor(cls_num_list, dtype=torch.float)
-        frequency_list = torch.log(cls_num_list)
-        self.frequency_list = torch.log(sum(cls_num_list)) - frequency_list
-        # self.sampler = normal.Normal(0, sigma)
-        self.sampler = dirichlet.Dirichlet(self.frequency_list)
+        if reweight_epoch!=-1:
+            idx = 1
+            betas = [0,0.9999]
+            effective_num = 1.0 - np.power(betas[idx], cls_num_list)
+            per_cls_weights = (1.0 - betas[idx]) / np.array(effective_num)
+            per_cls_weights = per_cls_weights / np.sum(per_cls_weights) * len(cls_num_list)
+            self.per_cls_weights_enabled = torch.tensor(per_cls_weights, dtype=torch.float, requires_grad=False)
+        else:
+            self.per_cls_weights_enabled = None
+        cls_num_list = np.array(cls_num_list) / np.sum(cls_num_list)
+        C = len(cls_num_list)
+        per_cls_weights = C * cls_num_list * reweight_factor + 1 - reweight_factor
+        per_cls_weights = per_cls_weights / np.max(per_cls_weights)
 
         # save diversity per_cls_weights
-        self.T = 1000
+        self.per_cls_weights_enabled_diversity = torch.tensor(per_cls_weights,dtype=torch.float,requires_grad=False).to("cuda:0")
+        self.T = (reweight_epoch+annealing)/reweight_factor
         self.tau = tau
+        self.per_cls_weights_diversity = None
+        self.tempature = []
 
     def to(self,device):
         super().to(device)
         self.m_list = self.m_list.to(device)
-        self.frequency_list = self.frequency_list.to(device)
+        if self.per_cls_weights_enabled is not None:
+            self.per_cls_weights_enabled = self.per_cls_weights_enabled.to(device)
+        if self.per_cls_weights_enabled_diversity is not None:
+            self.per_cls_weights_enabled_diversity = self.per_cls_weights_enabled_diversity.to(device)
         return self
+
+    def _hook_before_epoch(self,epoch):
+        if self.reweight_epoch != -1:
+            self.epoch = epoch
+            if epoch > self.reweight_epoch:
+                self.per_cls_weights_base = self.per_cls_weights_enabled
+                self.per_cls_weights_diversity = self.per_cls_weights_enabled_diversity
+            else:
+                self.per_cls_weights_base = None
+                self.per_cls_weights_diversity = None
 
     def get_final_output(self, x, y):
         # index = torch.zeros_like(x, dtype=torch.bool, device=x.device)
@@ -37,32 +62,9 @@ class TLCLoss(nn.Module):
         # index_float = index.float()
         # batch_m = torch.matmul(self.m_list[None,:], index_float.transpose(0,1))
         # batch_m = batch_m.view((-1, 1))
-        # x_m = x - batch_m * 2
+        # x_m = x - batch_m
         # return torch.exp(torch.where(index, x_m, x))
-        return torch.exp(x)
-
-    def region_loss(self, x, y):
-        y = torch.clamp(y - 1, min=0)
-        y = (y / 3).long()
-        # return self.edl_loss(torch.log, x, y)
-        return F.cross_entropy(x, y)
-        # return self.loglikelihood_loss(x, y)
-    
-    def loglikelihood_loss(self, x, y):
-        alpha = x + 1
-        y = F.one_hot(y, num_classes=3)
-        S = torch.sum(alpha, dim=1, keepdim=True)
-        loglikelihood_err = torch.sum((y - (alpha / S)) ** 2, dim=1, keepdim=True)
-        loglikelihood_var = torch.sum(alpha * (S - alpha) / (S * S * (S + 1)), dim=1, keepdim=True)
-        loglikelihood = loglikelihood_err + loglikelihood_var
-        return loglikelihood.mean()
-    
-    def edl_loss(self, func, x, y):
-        alpha = x + 1
-        y = F.one_hot(y, num_classes=3)
-        S = torch.sum(alpha, dim=1, keepdim=True)
-        A = torch.sum(y * (func(S) - func(alpha)), dim=1, keepdim=True)
-        return A.mean()
+        return torch.exp(x + self.m_list)
 
     def forward(self,x,y,epoch,extra_info=None):
         loss = 0.0
@@ -87,10 +89,17 @@ class TLCLoss(nn.Module):
             l += epoch/self.T*kl.squeeze(-1)
 
             # diversity
-            output_dist = F.log_softmax(extra_info["logits"][i],dim=1)
+            if self.per_cls_weights_diversity is not None:
+                diversity_temperature = self.per_cls_weights_diversity.view((1,-1))
+                temperature_mean = diversity_temperature.mean().item()
+            else:
+                diversity_temperature = 1
+                temperature_mean = 1
+            output_dist = F.log_softmax(extra_info["logits"][i]/diversity_temperature,dim=1)
             with torch.no_grad():
-                mean_output_dist = F.softmax(x,dim=1)
-            l -= 0.01*F.kl_div(output_dist,mean_output_dist,reduction="none").sum(dim=1)
+                mean_output_dist = F.softmax(x/diversity_temperature,dim=1)
+            l -= 0.01*temperature_mean*temperature_mean*F.kl_div(output_dist,mean_output_dist,reduction="none").sum(dim=1)
+
 
             # dynamic engagement
             w = extra_info['w'][i]

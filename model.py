@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 import torch.nn.functional as F
 from collections import OrderedDict
 
@@ -365,13 +366,84 @@ class EMGTLC(nn.Module):
 
 
         # dynamic reweighting
-        exp_w = torch.stack(self.w) / self.eta
-        exp_w = torch.softmax(exp_w[:-1], dim=0)
+        # exp_w = torch.stack(self.w) / self.eta
+        # exp_w = torch.softmax(exp_w[:-1], dim=0)
         # self.w = exp_w
-        exp_w = exp_w.unsqueeze(-1)
-        # exp_w = [torch.exp(wi/self.eta) for wi in self.w]
-        # exp_w = [wi/wi.sum() for wi in exp_w]
-        # exp_w = [wi.unsqueeze(-1) for wi in exp_w]
+        # exp_w = exp_w.unsqueeze(-1)
+        exp_w = [torch.exp(wi/self.eta) for wi in self.w]
+        exp_w = [wi/wi.sum() for wi in exp_w]
+        exp_w = [wi.unsqueeze(-1) for wi in exp_w]
+
+        reweighted_outs = [outs[i]*exp_w[i] for i in range(self.num_experts)]
+        return sum(reweighted_outs)
+
+
+class EMGBranch(nn.Module):
+    def __init__(self, classes, num_experts) -> None:
+        super().__init__()
+        self.num_experts = num_experts
+        self.eta = 0.2
+        self.conv1 = nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=1,bias=False)
+        self.bn1 = nn.BatchNorm2d(16)
+
+        self.layer1s = nn.ModuleList([self._make_layer(16, 32) for _ in range(num_experts)])
+        self.layer2s = nn.ModuleList([self._make_layer(32, 32) for _ in range(num_experts)])
+        self.linears = nn.ModuleList([NormedLinear(32*12*3, classes) for _ in range(num_experts)])
+        self.apply(self._weights_init)
+    
+    def _normalize(self, x):
+        return F.normalize(x, dim=1)
+    
+    def _weights_init(self, m):
+        if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+            init.kaiming_normal_(m.weight)
+
+    def _make_layer(self, in_channels, out_channels):
+        return nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=(3, 5)),
+                nn.BatchNorm2d(out_channels),
+                nn.PReLU(out_channels),
+                nn.Dropout2d(),
+                nn.AvgPool2d(kernel_size=(1, 3))
+            )
+
+    def forward(self, x):
+        x = x.unsqueeze(1)
+        x = F.relu(self.bn1(self.conv1(x)))
+        outs = []
+        self.logits = outs
+        b0 = None
+        self.w = [torch.ones(len(x),dtype=torch.float,device=x.device)]
+        self.save_info = []
+
+        for i in range(self.num_experts):
+            xi = self.layer1s[i](x)
+            xi = self.layer2s[i](xi)
+            xi = xi.flatten(1)
+            xi = self.linears[i](xi)
+            xi = self._normalize(xi)
+            xi = xi * 15
+            outs.append(xi)
+
+            # evidential
+            alpha = torch.exp(xi)+1
+            S = alpha.sum(dim=1,keepdim=True)
+            b = (alpha-1)/S
+            u = xi.shape[1]/S.squeeze(-1)
+            self.save_info.append(torch.cat([b, u.unsqueeze(1)], dim=1))
+
+            # update w
+            if b0 is None:
+                C = 0
+            else:
+                bb = b0.view(-1,b0.shape[1],1)@b.view(-1,1,b.shape[1])
+                C = bb.sum(dim=[1,2])-bb.diagonal(dim1=1,dim2=2).sum(dim=1)
+            b0 = b
+            self.w.append(self.w[-1]*u/(1-C))
+            
+        exp_w = [torch.exp(wi/self.eta) for wi in self.w]
+        exp_w = [wi/wi.sum() for wi in exp_w]
+        exp_w = [wi.unsqueeze(-1) for wi in exp_w]
 
         reweighted_outs = [outs[i]*exp_w[i] for i in range(self.num_experts)]
         return sum(reweighted_outs)
@@ -414,41 +486,6 @@ class EMGAttentionPool2d(nn.Module):
         return x.squeeze(0)
 
 
-
-class CNN2DEncoder(nn.Module):
-    def __init__(self, classes=10, kernel_size=3):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Conv2d(1, 32, kernel_size=(kernel_size, 5)), # shape(B,32,14,46)
-            nn.BatchNorm2d(32),
-            nn.PReLU(32),
-            nn.Dropout2d(),
-            # nn.MaxPool2d(kernel_size=(1, 3)),
-            nn.AvgPool2d(kernel_size=(1, 3)), # shape(B,32,16,15)
-            nn.Conv2d(32, 64, kernel_size=(kernel_size, 5)), # shape(B,64,12,11)
-            nn.BatchNorm2d(64),
-            nn.PReLU(64),
-            nn.Dropout2d(),
-            # nn.MaxPool2d(kernel_size=(1, 3)),
-            nn.AvgPool2d(kernel_size=(1, 3)), # shape(B,64,12,3)
-            nn.Flatten(),
-        )
-
-        self.fc = nn.Sequential(
-            nn.ReLU(),
-            nn.Linear(64*12*3, 512),
-            nn.ReLU(),
-            nn.Linear(512, 64),
-            nn.ReLU(),
-            nn.Linear(64, classes),
-        )
-
-    def forward(self, input):
-        """
-        shape: (N, C, L)
-        """
-        return self.fc(self.net(input.unsqueeze(1)))
-    
 
 class ViTEncoder(nn.Module):
     # input shape(B,1,16,50)
@@ -496,9 +533,11 @@ class ViTEncoder(nn.Module):
 
 
 class MoE5FC(nn.Module):
-    def __init__(self, classes, num_experts=1):
+    def __init__(self, classes, num_experts=1, cls_num_list=None):
         super(MoE5FC, self).__init__()
         self.num_experts = num_experts
+        m_list = torch.tensor(cls_num_list, dtype=torch.float, requires_grad=False)
+        self.m_list = m_list / torch.max(m_list)
         
         # shape(B,1,16,50)
         self.backbone = nn.Sequential(
@@ -517,6 +556,11 @@ class MoE5FC(nn.Module):
             nn.Flatten(),
         )
         self.fc = nn.ModuleList([self.make_fc(classes) for _ in range(self.num_experts)])
+    
+    def to(self, device):
+        super().to(device)
+        self.m_list = self.m_list.to(device)
+        return self
 
     def make_fc(self, out_features):
         return nn.Sequential(
@@ -534,8 +578,141 @@ class MoE5FC(nn.Module):
         x = self.backbone(x.unsqueeze(1))
   
         # Calculate the expert outputs
+        # if self.training:
+        #     outputs = torch.stack([fc(x) - self.m_list[None, :] for fc in self.fc], dim=2)
+        # else:
         outputs = torch.stack([fc(x) for fc in self.fc], dim=2)
 
         # Multiply the expert outputs with the weights and
         # sum along the third dimension
         return torch.mean(outputs, dim=2)
+
+
+class EMGBranchNaive(nn.Module):
+    def __init__(self, classes, num_experts, dropout=0.2, reweight_epoch=30) -> None:
+        super().__init__()
+        self.num_experts = num_experts
+        self.classes = classes
+        self.reweight_epoch = reweight_epoch
+        self.share_net = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=(3,5)),
+            nn.BatchNorm2d(32),
+            nn.PReLU(32),
+            nn.Dropout2d(dropout),
+            nn.AvgPool2d(kernel_size=(1, 3)), # shape(B,32,16,15)
+        )
+
+        self.layer1s = nn.ModuleList([self._make_layer(32, 64, dropout) for _ in range(num_experts)])
+        self.linears = nn.ModuleList([self._make_fc(64*12*3, classes) for _ in range(num_experts)])
+        self.correct = None
+        self.total = None
+        self.pre_correct = None
+        self.pre_total = None
+        # self.linears = nn.ModuleList([self._make_normLinear(64*12*3, classes) for _ in range(num_experts)])
+        self.eta = 1.5
+
+    def _hook_before_epoch(self, epoch):
+        if epoch >= self.reweight_epoch:
+            self.pre_correct = torch.zeros(self.num_experts, self.classes)
+            self.pre_total = torch.zeros(self.classes)
+
+    def _hook_after_epoch(self, epoch):
+        if self.pre_correct != None:
+            self.correct = self.pre_correct
+            self.total = self.pre_total
+    
+    def _normalize(self, x):
+        return F.normalize(x, dim=1)
+    
+    def _weights_init(self, m):
+        if isinstance(m, nn.Linear) or isinstance(m, nn.Conv2d):
+            init.kaiming_normal_(m.weight)
+
+    def _make_layer(self, in_channels, out_channels, dropout):
+        return nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=(3, 5)),
+                nn.BatchNorm2d(out_channels),
+                nn.PReLU(out_channels),
+                nn.Dropout2d(dropout),
+                nn.AvgPool2d(kernel_size=(1, 3))
+            )
+    
+    def _make_fc(self, in_dim, classes):
+        return nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(in_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, 64),
+            nn.ReLU(),
+            nn.Linear(64, classes),
+        )
+
+    def _make_normLinear(self, in_dim, classes):
+        return nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(in_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, 64),
+            nn.ReLU(),
+            NormedLinear(64, classes),
+        )
+    
+    def forward(self, x, y=None):
+        x = x.unsqueeze(1)
+        x = self.share_net(x)
+        outs = []
+        self.logits = outs
+        b0 = None
+        self.w = [torch.ones(len(x),dtype=torch.float,device=x.device)]
+
+        if self.pre_total != None and not self.training:
+            for i in range(len(y)):
+                self.pre_total[y[i]] += 1
+
+        for i in range(self.num_experts):
+            xi = self.layer1s[i](x)
+            xi = xi.flatten(1)
+            xi = self.linears[i](xi)
+            outs.append(xi)
+
+            # correct predictions per class
+            if self.pre_correct != None and not self.training:
+                with torch.no_grad():
+                    pred = torch.argmax(xi, dim=1)
+                    for j in range(len(y)):
+                        if y[j] == pred[j]:
+                            self.pre_correct[i][y[j]] += 1
+
+        #     # evidential
+        #     alpha = torch.exp(xi)+1
+        #     S = alpha.sum(dim=1,keepdim=True)
+        #     b = (alpha-1)/S
+        #     u = xi.shape[1]/S.squeeze(-1)
+
+        #     # update w
+        #     if b0 is None:
+        #         C = 0
+        #     else:
+        #         bb = b0.view(-1,b0.shape[1],1)@b.view(-1,1,b.shape[1])
+        #         C = bb.sum(dim=[1,2])-bb.diagonal(dim1=1,dim2=2).sum(dim=1)
+        #     b0 = b
+        #     self.w.append(self.w[-1]*u/(1-C))
+        
+        # exp_w = [torch.exp(wi/self.eta) for wi in self.w]
+        # exp_w = [wi/wi.sum() for wi in exp_w]
+        # exp_w = [wi.unsqueeze(-1) for wi in exp_w]
+
+        # reweighted_outs = [outs[i]*exp_w[i] for i in range(self.num_experts)]
+        # # return sum(reweighted_outs)
+        # if self.correct != None:
+        #     outs_weight = torch.softmax(self.correct, dim=0).to(x.device)
+        #     reweighted_outs = [outs[i] * outs_weight[i] for i in range(self.num_experts)]
+        #     return sum(reweighted_outs)
+        # else:
+        if self.correct != None:
+            correct_sum = self.correct.sum(dim=1)
+            outs_weight = (correct_sum / correct_sum.sum()).to(x.device)
+            reweighted_outs = [outs[i] * outs_weight[i] for i in range(self.num_experts)]
+            return sum(reweighted_outs)
+        else:
+            return sum(outs) / len(outs)
