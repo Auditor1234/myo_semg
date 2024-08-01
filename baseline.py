@@ -70,9 +70,9 @@ class TemporalConvNet(nn.Module):
         return self.network(x)
 
 class TCN(nn.Module):
-    def __init__(self, output_size, input_size=8, num_channels=[8, 8, 8], kernel_size=51, dropout=0.4):
+    def __init__(self, output_size, input_size=16, num_channels=[8, 32, 64], kernel_size=3, dropout=0.4):
         super(TCN, self).__init__()
-        self._batch_norm0 = nn.BatchNorm1d(8)
+        self._batch_norm0 = nn.BatchNorm1d(input_size)
         self._tcn1 = TemporalConvNet(input_size, num_channels, kernel_size=kernel_size, dropout=dropout)
         #self.linear = nn.Linear(num_channels[-1], output_size)
         #self._fc1 = nn.Linear(num_channels[-1]*400, 5120)
@@ -81,6 +81,12 @@ class TCN(nn.Module):
         #print("Number Parameters: ", self.get_n_params())
         self.initialize_weights()
         print("Number Parameters: ", self.get_n_params())
+    
+    def _hook_before_epoch(self, epoch):
+        pass
+
+    def _hook_after_epoch(self, epoch):
+        pass
 
     def get_n_params(self):
         model_parameters = filter(lambda p: p.requires_grad, self.parameters())
@@ -93,7 +99,7 @@ class TCN(nn.Module):
                 torch.nn.init.kaiming_normal_(m.weight)
                 m.bias.data.zero_()
 
-    def forward(self, inputs):
+    def forward(self, inputs, target=None):
         """Inputs have to have dimension (N, C_in, L_in)"""
         '''
         x = []
@@ -101,11 +107,12 @@ class TCN(nn.Module):
             x.append(torch.mean(inputs[:, A[i], :], dim=1))
         y1=self.tcn(torch.stack(x, dim=1))
         '''
-        inputs = inputs.squeeze()
+        if inputs.shape[0] != 1:
+            inputs = inputs.squeeze()
         temporal_features1 = self._tcn1(self._batch_norm0(inputs))  # input should have dimension (N, C, L)
         output = self._output(temporal_features1[:,:,-1])
 
-        return output # F.log_softmax(o, dim=1)
+        return output, None, None # F.log_softmax(o, dim=1)
 
 
 class ECNN(nn.Module):
@@ -114,25 +121,25 @@ class ECNN(nn.Module):
         super(ECNN, self).__init__()
         # self._batch_norm0 = nn.BatchNorm2d(1)
         self._batch_norm0 = nn.BatchNorm2d(1)
-        self._conv1 = nn.Conv2d(1, 32, kernel_size=(k_c, 5), bias=False)
+        self._conv1 = nn.Conv2d(1, 32, kernel_size=(k_c, 5), bias=False, padding=(1,2))
         self._batch_norm1 = nn.BatchNorm2d(32)
         self._prelu1 = nn.PReLU(32)
         self._dropout1 = nn.Dropout2d(dropout)
         self._pool1 = nn.MaxPool2d(kernel_size=(1, 3))
 
-        self._conv2 = nn.Conv2d(32, 64, kernel_size=(k_c, 5), bias=False)
+        self._conv2 = nn.Conv2d(32, 64, kernel_size=(k_c, 5), bias=False, padding=(1,2))
         self._batch_norm2 = nn.BatchNorm2d(64)
         self._prelu2 = nn.PReLU(64)
         self._dropout2 = nn.Dropout2d(dropout)
         self._pool2 = nn.MaxPool2d(kernel_size=(1, 3))
 
-        self._conv3 = nn.Conv2d(64, 128, kernel_size=(k_c, 5), bias=False)
+        self._conv3 = nn.Conv2d(64, 128, kernel_size=(k_c, 5), bias=False, padding=(1,2))
         self._batch_norm3 = nn.BatchNorm2d(128)
         self._prelu3 = nn.PReLU(128)
         self._dropout3 = nn.Dropout2d(dropout)
         self._pool3 = nn.MaxPool2d(kernel_size=(1, 3))
 
-        self._fc1 = nn.Linear(128*2*5, 1024)
+        self._fc1 = nn.Linear(128*16*1, 1024)
         self._fc_batch_norm1 = nn.BatchNorm1d(1024)
         self._fc_prelu1 = nn.PReLU(1024)
         self._fc_dropout1 = nn.Dropout(dropout)
@@ -146,6 +153,12 @@ class ECNN(nn.Module):
         self.initialize_weights()
 
         print("Number Parameters: ", self.get_n_params())
+
+    def _hook_before_epoch(self, epoch):
+        pass
+
+    def _hook_after_epoch(self, epoch):
+        pass
 
     def get_n_params(self):
         model_parameters = filter(lambda p: p.requires_grad, self.parameters())
@@ -164,7 +177,8 @@ class ECNN(nn.Module):
                 if m.bias is not None:
                     m.bias.data.zero_()
 
-    def forward(self, x):
+    def forward(self, x, y=None):
+        x = x.unsqueeze(1)
         conv1 = self._dropout1(self._prelu1(self._batch_norm1(self._conv1(self._batch_norm0(x)))))
         pool1 = self._pool1(conv1)
 
@@ -182,7 +196,78 @@ class ECNN(nn.Module):
         fc2 = self._fc_dropout2(
             self._fc_prelu2(self._fc_batch_norm2(self._fc2(fc1))))
         output = self._output(fc2)
-        return output
+        return output, None, None
+
+
+class ECNN_Model(nn.Module):
+    def __init__(self, number_of_class=12, dropout=0.5, k_c=3):
+        # k_c: kernel size of channel
+        super(ECNN_Model, self).__init__()
+        # self._batch_norm0 = nn.BatchNorm2d(1)
+        self._conv1 = nn.Conv2d(1, 32, kernel_size=(k_c, 5))
+        self._batch_norm1 = nn.BatchNorm2d(32)
+        self._prelu1 = nn.PReLU(32)
+        self._dropout1 = nn.Dropout2d(dropout)
+        self._pool1 = nn.MaxPool2d(kernel_size=(1, 3))
+
+        self._conv2 = nn.Conv2d(32, 64, kernel_size=(k_c, 5))
+        self._batch_norm2 = nn.BatchNorm2d(64)
+        self._prelu2 = nn.PReLU(64)
+        self._dropout2 = nn.Dropout2d(dropout)
+        self._pool2 = nn.MaxPool2d(kernel_size=(1, 3))
+
+        self._fc1 = nn.Linear((16 - 2 * k_c + 2) * 3 * 64, 500)
+        # 8 = 12 channels - 2 -2 ;  53 = ((500-4)/3-4)/3
+        self._batch_norm3 = nn.BatchNorm1d(500)
+        self._prelu3 = nn.PReLU(500)
+        self._dropout3 = nn.Dropout(dropout)
+
+        self._output = nn.Linear(500, number_of_class)
+        self.initialize_weights()
+
+        print("Number Parameters: ", self.get_n_params())
+    
+    def _hook_before_epoch(self, epoch):
+        pass
+
+    def _hook_after_epoch(self, epoch):
+        pass
+
+    def get_n_params(self):
+        model_parameters = filter(lambda p: p.requires_grad, self.parameters())
+        number_params = sum([np.prod(p.size()) for p in model_parameters])
+        return number_params
+
+    def init_weights(self):
+        for m in self.modules():
+            torch.nn.init.kaiming_normal(m.weight)
+            m.bias.data.zero_()
+
+    def initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                torch.nn.init.kaiming_normal_(m.weight)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                torch.nn.init.kaiming_normal_(m.weight)
+                m.bias.data.zero_()
+
+    def forward(self, x, y=None):
+        # x = x.permute(0,1,3,2)  --> batch * 1 * 16 * 50
+        # print(x.size())
+        x = x.unsqueeze(1)
+        conv1 = self._dropout1(self._prelu1(self._batch_norm1(self._conv1(x))))
+        # conv1 = self._dropout1(
+        # self._prelu1(self._batch_norm1(self._conv1(self._batch_norm0(x)))))
+        pool1 = self._pool1(conv1)
+        conv2 = self._dropout2(
+            self._prelu2(self._batch_norm2(self._conv2(pool1))))
+        pool2 = self._pool2(conv2)
+        flatten_tensor = pool2.view(pool2.size(0), -1)
+        fc1 = self._dropout3(
+            self._prelu3(self._batch_norm3(self._fc1(flatten_tensor))))
+        output = self._output(fc1)
+        return output, None, None
 
 
 class CNN2DEncoder(nn.Module):
@@ -212,9 +297,15 @@ class CNN2DEncoder(nn.Module):
             nn.ReLU(),
             nn.Linear(64, classes),
         )
+    
+    def _hook_before_epoch(self, epoch):
+        pass
 
-    def forward(self, input):
+    def _hook_after_epoch(self, epoch):
+        pass
+
+    def forward(self, input, target=None):
         """
         shape: (N, C, L)
         """
-        return self.fc(self.net(input.unsqueeze(1)))
+        return self.fc(self.net(input.unsqueeze(1))), None, None

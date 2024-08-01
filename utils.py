@@ -2,10 +2,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from sklearn.metrics import confusion_matrix
+from sklearn.manifold import TSNE
+import umap
+import torch.nn.functional as F
 
 
 def plot_confusion_matrix(y_true, y_pred, title, labels_name=None, colorbar=False, file='confusion_matrix.png'):
     cm = confusion_matrix(y_true, y_pred)
+    plt.cla()
     plt.imshow(cm, interpolation='nearest', cmap=None)
     for i in range(len(cm)):
         for j in range(len(cm)):
@@ -61,4 +65,70 @@ def ACC(output, target, region_len=100/3, subject=1, file=None, save_info=[]):
         #     save_info[i] = torch.cat([save_info[i], pred.unsqueeze(1), target.unsqueeze(1)], dim=1)
         #     np.savetxt("res/csv/s%d_expert%din%d_info.csv" % (subject, i, num_experts), save_info[i].cpu().numpy(), delimiter="," ,fmt="%.4f")
 
-    return acc
+    return acc, region_acc, split_acc
+
+def plot_features(x, y, save_path='res/img/features.png', mode='tsne'):
+    if mode == 'tsne':
+        reducer = TSNE(random_state=42)
+    else:
+        reducer = umap.UMAP(random_state=42)
+    results = reducer.fit_transform(x)
+    plt.clf()
+    plt.scatter(results[:, 0], results[:, 1], c=y, label=mode)
+    plt.colorbar(boundaries=np.arange(11)-0.5).set_ticks(np.arange(10))
+    plt.legend()
+    plt.savefig(save_path, dpi=120)
+
+def gen_uncertainty(logits, classic=True):
+    output = F.normalize(logits.clone().detach())
+    uncertainty = None
+    if classic:
+        alpha = torch.exp(output) + 1
+        S = alpha.sum(dim=1,keepdim=True)
+        uncertainty = output.shape[1] / S.squeeze(-1)
+    else:
+        output_exp = torch.exp(output)
+        max_val, max_idx = torch.max(output_exp, dim=-1)
+        row_idx = torch.arange(output_exp.shape[0])
+        
+        non_target_logits = torch.ones_like(output_exp)
+        non_target_logits[row_idx, max_idx] = 0
+        non_target_logits *= output_exp
+        
+        second_val, _ = torch.max(non_target_logits, dim=-1)
+        uncertainty = second_val / max_val
+    return uncertainty
+
+def plot_uncertainty_accuracy(output, y_true):
+    output = output.cpu()
+    y_pred = torch.argmax(output, dim=1)
+    y_pred = y_pred.numpy()
+    y_true = y_true.cpu().numpy()
+    num_class = output.shape[1]
+
+    cm = confusion_matrix(y_true, y_pred)
+    acc = []
+    for i in range(len(cm)):
+        acc.append(cm[i, i] / sum(cm[:, i]))
+    
+    uncertainty = gen_uncertainty(output)
+    u_avg = []
+    for i in  range(num_class):
+        u_i = uncertainty[y_true == i]
+        u_avg.append(u_i.mean().numpy())
+
+
+    plt.clf()
+    fig, ax1 = plt.subplots()
+    ax1.plot(acc, label='accuracy', color='green', linestyle='-',marker='o')
+    ax1.set_ylabel("accuracy")
+
+    ax2 = ax1.twinx()
+    ax2.plot(u_avg, label='uncertainty', color='red', linestyle='-',marker='X')
+    ax2.set_ylabel("uncertainty", labelpad=40)
+
+    fig.legend(loc="upper right")
+    plt.title('uncertainty vs accuracy')
+    plt.savefig('res/img/uncertainty-accuracy.png')
+
+    

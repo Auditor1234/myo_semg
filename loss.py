@@ -2,6 +2,8 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 import numpy as np
+from torch.distributions import normal
+from utils import gen_uncertainty
 
 
 
@@ -96,7 +98,7 @@ def cross_entropy(predictions, y, epoch_num=10, classes=10):
     return F.cross_entropy(predictions, y)
 
 
-def edl_mse_loss(output, target, epoch_num=10, classes=10, ecnn_type=2):
+def edl_mse_loss(output, target, epoch_num=10, classes=12, ecnn_type=2):
     """
     ecnn_type: 0 for ECNN-A, 1 for ECNN-B and 2 for ECNN-C
     """
@@ -164,6 +166,7 @@ class FuseLoss(nn.Module):
         m_list = m_list*(max_m/np.max(m_list))
         m_list = torch.tensor(m_list, dtype=torch.float, requires_grad=False)
         self.m_list = m_list
+        self.num_cls = len(cls_num_list)
 
         if reweight_epoch!=-1:
             idx = 1
@@ -185,6 +188,7 @@ class FuseLoss(nn.Module):
         self.tau = tau
         self.per_cls_weights_diversity = None
         self.tempature = []
+        self.MSELoss = nn.MSELoss()
 
     def to(self,device):
         super().to(device)
@@ -206,44 +210,39 @@ class FuseLoss(nn.Module):
                 self.per_cls_weights_diversity = None
 
     def get_final_output(self, x, y):
-        # index = torch.zeros_like(x, dtype=torch.bool, device=x.device)
-        # y = y.type(torch.int64)
-        # index.scatter_(1, y.data.view(-1,1), 1)
-        # index_float = index.float()
-        # batch_m = torch.matmul(self.m_list[None,:], index_float.transpose(0,1))
-        # batch_m = batch_m.view((-1, 1))
-        # x_m = x - batch_m * torch.mean(torch.abs(x), dim=-1, keepdim=True)
-        # return torch.exp(torch.where(index, x_m, x))
-        temp = torch.mean(torch.abs(x), dim=-1, keepdim=True)
-        return x - self.m_list * temp
+        index = torch.zeros_like(x, dtype=torch.bool, device=x.device)
+        y = y.type(torch.int64)
+        index.scatter_(1, y.data.view(-1,1), 1)
+        index_float = index.float()
+        batch_m = torch.matmul(self.m_list[None,:], index_float.transpose(0,1))
+        batch_m = batch_m.view((-1, 1))
+        x_m = x - batch_m * torch.mean(torch.abs(x), dim=-1, keepdim=True)
+        return torch.where(index, x_m, x)
+        # temp = torch.mean(torch.abs(x), dim=-1, keepdim=True)
+        # return x - self.m_list * temp
 
     def forward(self, x, y, epoch, extra_info=None):
+        device = x.device
         loss = 0.0
         for i in range(extra_info["num_expert"]):
-            alpha = self.get_final_output(extra_info["logits"][i], y)
+            # logits adjustment
+            logits = extra_info["logits"][i]
+            scale = torch.mean(torch.abs(logits), dim=-1, keepdim=True)
+            # alpha = self.get_final_output(logits, y)
+            alpha = logits - scale * self.m_list
 
+            # uncertainty-aware perturbation learning
             y = y.type(torch.int64)
-            l = F.cross_entropy(alpha, y, weight=self.per_cls_weights_base)
-
-            # if extra_info["total"] != None:
-            #     easiness = (extra_info["correct"][i] / extra_info["total"]).to(x.device)
-            #     uncertainty = (1 - easiness) ** 2
-            #     tmp = F.cross_entropy(alpha, y, uncertainty)
-            #     l += tmp
-
-            # alpha = torch.exp(alpha)
-            # S = alpha.sum(dim=1,keepdim=True)
-            # l = F.nll_loss(torch.log(alpha)-torch.log(S),y,weight=self.per_cls_weights_base,reduction="none") # 按照y的下标取出目标值的负数
-
-            # # KL
-            # yi = F.one_hot(y,num_classes=alpha.shape[1])
-
-            # # adjusted parameters of D(p|alpha)
-            # alpha_tilde = yi+(1-yi)*(alpha+1)
-            # S_tilde = alpha_tilde.sum(dim=1,keepdim=True)
-            # kl = torch.lgamma(S_tilde)-torch.lgamma(torch.tensor(alpha_tilde.shape[1]))-torch.lgamma(alpha_tilde).sum(dim=1,keepdim=True) \
-            #     +((alpha_tilde-1)*(torch.digamma(alpha_tilde)-torch.digamma(S_tilde))).sum(dim=1,keepdim=True)
-            # l += epoch/self.T*kl.squeeze(-1)
+            if epoch < self.reweight_epoch:
+                l = F.cross_entropy(alpha, y, weight=self.per_cls_weights_base)
+            else:
+                with torch.no_grad():
+                    u = gen_uncertainty(logits).to(device)
+                    sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  u)
+                    variation = sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1)
+                    variation = variation * scale / 10
+                l = F.cross_entropy(alpha + variation, y, weight=self.per_cls_weights_base)
+                # l += u_l * 0.1
 
             # diversity
             if self.per_cls_weights_diversity is not None:
@@ -252,17 +251,11 @@ class FuseLoss(nn.Module):
             else:
                 diversity_temperature = 1
                 temperature_mean = 1
-            output_dist = F.log_softmax(extra_info["logits"][i]/diversity_temperature,dim=1)
-            with torch.no_grad():
-                mean_output_dist = F.softmax(x/diversity_temperature,dim=1)
-            l -= 0.001*temperature_mean*temperature_mean*F.kl_div(output_dist,mean_output_dist,reduction="none").sum(dim=1).mean()
 
-            # # dynamic engagement
-            # w = extra_info['w'][i]/extra_info['w'][i].max()
-            # loss += l.sum() / len(l)
-            # w = torch.where(w>self.tau,True,False)
-            # if w.sum() != 0:
-            #     loss += (w*l).sum()/w.sum()
+            # output_dist = F.log_softmax(logits/diversity_temperature,dim=1)
+            # with torch.no_grad():
+            #     mean_output_dist = F.softmax(x/diversity_temperature,dim=1)
+            # l -= 0.001*temperature_mean*temperature_mean*F.kl_div(output_dist,mean_output_dist,reduction="none").sum(dim=1).mean()
 
             loss += l.mean()
         return loss

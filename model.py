@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
 from collections import OrderedDict
+from utils import gen_uncertainty
 
 
 class CNN(nn.Module):
@@ -589,11 +590,12 @@ class MoE5FC(nn.Module):
 
 
 class EMGBranchNaive(nn.Module):
-    def __init__(self, classes, num_experts, dropout=0.2, reweight_epoch=30) -> None:
+    def __init__(self, classes, num_experts, dropout=0.2, reweight_epoch=30, fusion=True) -> None:
         super().__init__()
         self.num_experts = num_experts
         self.classes = classes
         self.reweight_epoch = reweight_epoch
+        self.fusion = fusion
         self.share_net = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=(3,5)),
             nn.BatchNorm2d(32),
@@ -604,22 +606,15 @@ class EMGBranchNaive(nn.Module):
 
         self.layer1s = nn.ModuleList([self._make_layer(32, 64, dropout) for _ in range(num_experts)])
         self.linears = nn.ModuleList([self._make_fc(64*12*3, classes) for _ in range(num_experts)])
-        self.correct = None
-        self.total = None
-        self.pre_correct = None
-        self.pre_total = None
-        # self.linears = nn.ModuleList([self._make_normLinear(64*12*3, classes) for _ in range(num_experts)])
+        self.reweight = False
         self.eta = 1.5
 
     def _hook_before_epoch(self, epoch):
         if epoch >= self.reweight_epoch:
-            self.pre_correct = torch.zeros(self.num_experts, self.classes)
-            self.pre_total = torch.zeros(self.classes)
+            self.reweight = True
 
     def _hook_after_epoch(self, epoch):
-        if self.pre_correct != None:
-            self.correct = self.pre_correct
-            self.total = self.pre_total
+        pass
     
     def _normalize(self, x):
         return F.normalize(x, dim=1)
@@ -662,12 +657,10 @@ class EMGBranchNaive(nn.Module):
         x = self.share_net(x)
         outs = []
         self.logits = outs
+        feat = []
+        W = []
         b0 = None
         self.w = [torch.ones(len(x),dtype=torch.float,device=x.device)]
-
-        if self.pre_total != None and not self.training:
-            for i in range(len(y)):
-                self.pre_total[y[i]] += 1
 
         for i in range(self.num_experts):
             xi = self.layer1s[i](x)
@@ -675,44 +668,18 @@ class EMGBranchNaive(nn.Module):
             xi = self.linears[i](xi)
             outs.append(xi)
 
-            # correct predictions per class
-            if self.pre_correct != None and not self.training:
-                with torch.no_grad():
-                    pred = torch.argmax(xi, dim=1)
-                    for j in range(len(y)):
-                        if y[j] == pred[j]:
-                            self.pre_correct[i][y[j]] += 1
+        if self.reweight and self.fusion:
+            inv_u = []
+            with torch.no_grad():
+                for i in range(len(outs)):
+                    uncertainty = gen_uncertainty(outs[i])
+                    inv_u.append(1 / uncertainty ** 2)
+                inv_u = torch.stack(inv_u)
+                denominator = torch.sum(inv_u, dim=0)
+            outs_weight = [(inv_u[i] / denominator).unsqueeze(1) for i in range(self.num_experts)]
 
-        #     # evidential
-        #     alpha = torch.exp(xi)+1
-        #     S = alpha.sum(dim=1,keepdim=True)
-        #     b = (alpha-1)/S
-        #     u = xi.shape[1]/S.squeeze(-1)
+            outs = [outs[i] * outs_weight[i] for i in range(self.num_experts)]
 
-        #     # update w
-        #     if b0 is None:
-        #         C = 0
-        #     else:
-        #         bb = b0.view(-1,b0.shape[1],1)@b.view(-1,1,b.shape[1])
-        #         C = bb.sum(dim=[1,2])-bb.diagonal(dim1=1,dim2=2).sum(dim=1)
-        #     b0 = b
-        #     self.w.append(self.w[-1]*u/(1-C))
-        
-        # exp_w = [torch.exp(wi/self.eta) for wi in self.w]
-        # exp_w = [wi/wi.sum() for wi in exp_w]
-        # exp_w = [wi.unsqueeze(-1) for wi in exp_w]
-
-        # reweighted_outs = [outs[i]*exp_w[i] for i in range(self.num_experts)]
-        # # return sum(reweighted_outs)
-        # if self.correct != None:
-        #     outs_weight = torch.softmax(self.correct, dim=0).to(x.device)
-        #     reweighted_outs = [outs[i] * outs_weight[i] for i in range(self.num_experts)]
-        #     return sum(reweighted_outs)
-        # else:
-        if self.correct != None:
-            correct_sum = self.correct.sum(dim=1)
-            outs_weight = (correct_sum / correct_sum.sum()).to(x.device)
-            reweighted_outs = [outs[i] * outs_weight[i] for i in range(self.num_experts)]
-            return sum(reweighted_outs)
+            return sum(outs), feat, W
         else:
-            return sum(outs) / len(outs)
+            return sum(outs) / len(outs), feat, W
