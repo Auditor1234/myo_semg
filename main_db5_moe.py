@@ -2,14 +2,21 @@ import numpy as np
 from model import EMGTLC, ViTEncoder, MoE5, MoE5FC, EMGBranchNaive
 from train import train
 from common_utils import setup_seed, data_label_shuffle
+from utils import gen_uncertainty
 from loss import cross_entropy, FuseLoss
-
+from functools import partial
+import torch
 from data_process import load_emg_label, filter_labels,\
                             min_max_normal, normal2LT, labels_normal, uniform_distribute, normal2LT
 
 
 
-def main(subjects, num_experts, fusion=True, reweight_epoch=30):
+def main(subjects, num_experts, 
+         fusion=True, 
+         reweight_epoch=30, 
+         weight_path='res/weight/best.pt', 
+         uncertainty_type='DST',
+         device=torch.device('cuda')):
     setup_seed(0)
 
     file_fmt = 'datasets/DB5/s%d/repetition%d.pt'
@@ -48,12 +55,18 @@ def main(subjects, num_experts, fusion=True, reweight_epoch=30):
     x_val, y_val = data_label_shuffle(x_val, y_val)
     x_test, y_test = data_label_shuffle(x_test, y_test)
 
+    uncertainty_generator = partial(gen_uncertainty, uncertainty_type=uncertainty_type)
 
-    model = EMGBranchNaive(classes, num_experts, reweight_epoch=reweight_epoch, fusion=fusion)
+    model = EMGBranchNaive(classes, num_experts, reweight_epoch=reweight_epoch, fusion=fusion, gen_uncertainty=uncertainty_generator)
     print(f'-------{num_experts} {model.__class__.__name__}-------')
 
-    loss_func = FuseLoss(np.bincount(y_train), reweight_epoch=reweight_epoch)
-    acc, region_acc, split_acc = train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, loss_func=loss_func, subject=subjects[0], file=save_file)
+    loss_func = FuseLoss(np.bincount(y_train), reweight_epoch=reweight_epoch, gen_uncertainty=uncertainty_generator)
+    acc, region_acc, split_acc = train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, 
+                                       loss_func=loss_func, 
+                                       subject=subjects[0], 
+                                       file=save_file,
+                                       weight_path=weight_path,
+                                       device=device)
     return acc, region_acc, split_acc
 
 if __name__ == '__main__':

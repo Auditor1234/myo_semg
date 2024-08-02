@@ -590,12 +590,13 @@ class MoE5FC(nn.Module):
 
 
 class EMGBranchNaive(nn.Module):
-    def __init__(self, classes, num_experts, dropout=0.2, reweight_epoch=30, fusion=True) -> None:
+    def __init__(self, classes, num_experts, dropout=0.2, reweight_epoch=30, fusion=True, gen_uncertainty=None) -> None:
         super().__init__()
         self.num_experts = num_experts
         self.classes = classes
         self.reweight_epoch = reweight_epoch
         self.fusion = fusion
+        self.gen_uncertainty = gen_uncertainty
         self.share_net = nn.Sequential(
             nn.Conv2d(1, 32, kernel_size=(3,5)),
             nn.BatchNorm2d(32),
@@ -672,7 +673,7 @@ class EMGBranchNaive(nn.Module):
             inv_u = []
             with torch.no_grad():
                 for i in range(len(outs)):
-                    uncertainty = gen_uncertainty(outs[i])
+                    uncertainty = self.gen_uncertainty(outs[i])
                     inv_u.append(1 / uncertainty ** 2)
                 inv_u = torch.stack(inv_u)
                 denominator = torch.sum(inv_u, dim=0)

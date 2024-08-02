@@ -158,7 +158,7 @@ def edl_mse_loss(output, target, epoch_num=10, classes=12, ecnn_type=2):
 
 
 class FuseLoss(nn.Module):
-    def __init__(self, cls_num_list=None, max_m=0.5, reweight_epoch=30, reweight_factor=0.05, annealing=500, tau=0.54):
+    def __init__(self, cls_num_list=None, max_m=0.5, reweight_epoch=30, reweight_factor=0.05, annealing=500, tau=0.54, gen_uncertainty=None):
         super(FuseLoss,self).__init__()
         self.reweight_epoch = reweight_epoch
 
@@ -167,6 +167,7 @@ class FuseLoss(nn.Module):
         m_list = torch.tensor(m_list, dtype=torch.float, requires_grad=False)
         self.m_list = m_list
         self.num_cls = len(cls_num_list)
+        self.gen_uncertainty = gen_uncertainty
 
         if reweight_epoch!=-1:
             idx = 1
@@ -237,7 +238,7 @@ class FuseLoss(nn.Module):
                 l = F.cross_entropy(alpha, y, weight=self.per_cls_weights_base)
             else:
                 with torch.no_grad():
-                    u = gen_uncertainty(logits).to(device)
+                    u = self.gen_uncertainty(logits).to(device)
                     sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  u)
                     variation = sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1)
                     variation = variation * scale / 10

@@ -19,7 +19,7 @@ def setup_seed(seed = 0):
     torch.backends.cudnn.enabled = False
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
-    torch.use_deterministic_algorithms(True)
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
 
 def save_model_weight(model, filename='res/best.pt'):

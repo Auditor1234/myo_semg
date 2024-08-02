@@ -51,11 +51,11 @@ def ACC(output, target, region_len=100/3, subject=1, file=None, save_info=[]):
     split_acc = [split_acc[i]/region_vol[i] for i in range(3)]
 
     print('Classification ACC:')
-    print('\t all \t =',acc)
-    print('\t region  =',region_acc)
-    print('\t head \t =',split_acc[0])
-    print('\t med \t =',split_acc[1])
-    print('\t tail \t =',split_acc[2])
+    print('\t all \t = %.2f' % (acc * 100) + '%')
+    print('\t region  = %.2f' % (region_acc * 100) + '%')
+    print('\t head \t = %.2f' % (split_acc[0] * 100) + '%')
+    print('\t med \t = %.2f' % (split_acc[1] * 100) + '%')
+    print('\t tail \t = %.2f' % (split_acc[2] * 100) + '%')
 
     
     if file:
@@ -79,14 +79,14 @@ def plot_features(x, y, save_path='res/img/features.png', mode='tsne'):
     plt.legend()
     plt.savefig(save_path, dpi=120)
 
-def gen_uncertainty(logits, classic=True):
+def gen_uncertainty(logits, uncertainty_type='DST'):
     output = F.normalize(logits.clone().detach())
     uncertainty = None
-    if classic:
+    if uncertainty_type == 'DST':
         alpha = torch.exp(output) + 1
         S = alpha.sum(dim=1,keepdim=True)
         uncertainty = output.shape[1] / S.squeeze(-1)
-    else:
+    elif uncertainty_type == 'RSM':
         output_exp = torch.exp(output)
         max_val, max_idx = torch.max(output_exp, dim=-1)
         row_idx = torch.arange(output_exp.shape[0])
@@ -97,6 +97,8 @@ def gen_uncertainty(logits, classic=True):
         
         second_val, _ = torch.max(non_target_logits, dim=-1)
         uncertainty = second_val / max_val
+    else:
+        raise Exception('uncertaint type can only be DST or RSM.')
     return uncertainty
 
 def plot_uncertainty_accuracy(output, y_true):

@@ -10,7 +10,12 @@ from utils import ACC, plot_features, plot_uncertainty_accuracy
 
 
 
-def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y, loss_func=nn.CrossEntropyLoss(), subject=0, file=None):
+def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y, 
+          loss_func=nn.CrossEntropyLoss(), 
+          subject=0, 
+          file=None, 
+          weight_path='res/best.pt',
+          device=None):
     train_X = torch.tensor(train_X, dtype=torch.float16)
     train_y = torch.tensor(train_y)
     val_X = torch.tensor(val_X, dtype=torch.float16)
@@ -36,7 +41,6 @@ def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y, loss_fu
         drop_last=True
         )
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     num_class = len(torch.unique(test_y))
     if isinstance(loss_func, nn.Module):
         loss_func.to(device)
@@ -45,7 +49,6 @@ def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y, loss_fu
     scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
     # scheduler = None
 
-    weight_path = 'res/6-10_best.pt'
     current_precision, best_precision = 0, 0
     loss, acc = [], []
     print('Start training...')
@@ -156,7 +159,7 @@ def validate(model, epoch, device, val_loader, num_class, subject=0, file=None):
         
         output = torch.cat([output, predict.detach()],dim=0)
         targets.append(y_label)
-        loop.set_description(f'Validation [{i + 1}/{len(val_loader)}]')
+        loop.set_description(f'Validation [{epoch + 1}]')
     targets = torch.cat(targets).to(device)
     model._hook_after_epoch(epoch)
     acc, region_acc, split_acc = ACC(output, targets, region_len=num_class / 3, subject=subject, file=file)
