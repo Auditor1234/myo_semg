@@ -16,7 +16,8 @@ def main(subjects, num_experts,
          reweight_epoch=30, 
          weight_path='res/weight/best.pt', 
          uncertainty_type='DST',
-         device=torch.device('cuda')):
+         device=torch.device('cuda'),
+         variable_cloud_size=True):
     setup_seed(0)
 
     file_fmt = 'datasets/DB5/s%d/repetition%d.pt'
@@ -57,10 +58,16 @@ def main(subjects, num_experts,
 
     uncertainty_generator = partial(gen_uncertainty, uncertainty_type=uncertainty_type)
 
-    model = EMGBranchNaive(classes, num_experts, reweight_epoch=reweight_epoch, fusion=fusion, gen_uncertainty=uncertainty_generator)
+    model = EMGBranchNaive(classes, num_experts, 
+                           reweight_epoch=reweight_epoch, 
+                           fusion=fusion, 
+                           gen_uncertainty=uncertainty_generator)
     print(f'-------{num_experts} {model.__class__.__name__}-------')
 
-    loss_func = FuseLoss(np.bincount(y_train), reweight_epoch=reweight_epoch, gen_uncertainty=uncertainty_generator)
+    loss_func = FuseLoss(np.bincount(y_train), 
+                         reweight_epoch=reweight_epoch, 
+                         gen_uncertainty=uncertainty_generator,
+                         variable_cloud_size=variable_cloud_size)
     acc, region_acc, split_acc = train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, 
                                        loss_func=loss_func, 
                                        subject=subjects[0], 

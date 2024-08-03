@@ -50,11 +50,12 @@ if __name__ == '__main__':
             f.write(str(i) + ',')
         for subject in range(subjects_min, subjects_max + 1):
             f.write('\n' + str(subject) + ',')
-            for num_expert in range(4, 1 + num_experts):
+            for num_expert in range(1, 1 + num_experts):
                 acc, region_acc, split_acc = main(subjects=subject, 
                                                   num_experts=num_expert, 
                                                   fusion=fusion,
                                                   weight_path=weight_path,
-                                                  device=device)
+                                                  device=device,
+                                                  reweight_epoch=20)
                 f.write('%.2f' % (acc * 100) + '%,')
                 f.flush()

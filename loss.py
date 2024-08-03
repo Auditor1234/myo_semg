@@ -158,7 +158,8 @@ def edl_mse_loss(output, target, epoch_num=10, classes=12, ecnn_type=2):
 
 
 class FuseLoss(nn.Module):
-    def __init__(self, cls_num_list=None, max_m=0.5, reweight_epoch=30, reweight_factor=0.05, annealing=500, tau=0.54, gen_uncertainty=None):
+    def __init__(self, cls_num_list=None, max_m=0.5, reweight_epoch=30, reweight_factor=0.05, annealing=500, tau=0.54, 
+                 gen_uncertainty=None, variable_cloud_size=False):
         super(FuseLoss,self).__init__()
         self.reweight_epoch = reweight_epoch
 
@@ -168,6 +169,7 @@ class FuseLoss(nn.Module):
         self.m_list = m_list
         self.num_cls = len(cls_num_list)
         self.gen_uncertainty = gen_uncertainty
+        self.variable_cloud_size = variable_cloud_size
 
         if reweight_epoch!=-1:
             idx = 1
@@ -238,8 +240,11 @@ class FuseLoss(nn.Module):
                 l = F.cross_entropy(alpha, y, weight=self.per_cls_weights_base)
             else:
                 with torch.no_grad():
-                    u = self.gen_uncertainty(logits).to(device)
-                    sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  u)
+                    if self.variable_cloud_size:
+                        cloud_size = self.gen_uncertainty(logits).to(device)
+                    else:
+                        cloud_size = 1
+                    sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  cloud_size)
                     variation = sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1)
                     variation = variation * scale / 10
                 l = F.cross_entropy(alpha + variation, y, weight=self.per_cls_weights_base)
