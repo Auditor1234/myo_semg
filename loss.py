@@ -186,7 +186,7 @@ class FuseLoss(nn.Module):
         per_cls_weights = per_cls_weights / np.max(per_cls_weights)
 
         # save diversity per_cls_weights
-        self.per_cls_weights_enabled_diversity = torch.tensor(per_cls_weights,dtype=torch.float,requires_grad=False).to("cuda:0")
+        self.per_cls_weights_enabled_diversity = torch.tensor(per_cls_weights,dtype=torch.float,requires_grad=False)
         self.T = (reweight_epoch+annealing)/reweight_factor
         self.tau = tau
         self.per_cls_weights_diversity = None

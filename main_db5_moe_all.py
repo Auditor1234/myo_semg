@@ -8,7 +8,7 @@ def parse_args():
 
     parser.add_argument("--subject_range", default=[1, 10], nargs='+', help="an subjects range", type=int)
     parser.add_argument("--num_experts", default=6, help="display a cubic of a given number", type=int)
-    parser.add_argument("--fusion", action="store_true", help="use BLUE fusion method")
+    parser.add_argument("--fusion", default=False, action="store_true", help="use BLUE fusion method")
     parser.add_argument("--uncertainty_type", default='DST', help="choose uncertainty type either DST or RSM", type=str)
     parser.add_argument("--device", default=0, help="GPU id", type=int)
     parser.add_argument("--reweight_epoch", default=20, help="epochs begin to reweight", type=int)

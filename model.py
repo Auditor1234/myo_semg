@@ -669,6 +669,7 @@ class EMGBranchNaive(nn.Module):
             xi = self.linears[i](xi)
             outs.append(xi)
 
+        normalized_outs = [torch.softmax(outs[i], dim=-1) for i in range(self.num_experts)]
         if self.reweight and self.fusion:
             inv_u = []
             with torch.no_grad():
@@ -678,9 +679,8 @@ class EMGBranchNaive(nn.Module):
                 inv_u = torch.stack(inv_u)
                 denominator = torch.sum(inv_u, dim=0)
             outs_weight = [(inv_u[i] / denominator).unsqueeze(1) for i in range(self.num_experts)]
-
-            outs = [outs[i] * outs_weight[i] for i in range(self.num_experts)]
-
-            return sum(outs), feat, W
         else:
-            return sum(outs) / len(outs), feat, W
+            outs_weight = [1 / self.num_experts for _ in range(self.num_experts)]
+        # outs = [outs[i] * outs_weight[i] for i in range(self.num_experts)]
+        normalized_outs = [normalized_outs[i] * outs_weight[i] for i in range(self.num_experts)]
+        return sum(normalized_outs), feat, W
