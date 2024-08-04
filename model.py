@@ -681,6 +681,6 @@ class EMGBranchNaive(nn.Module):
             outs_weight = [(inv_u[i] / denominator).unsqueeze(1) for i in range(self.num_experts)]
         else:
             outs_weight = [1 / self.num_experts for _ in range(self.num_experts)]
-        outs = [outs[i] * outs_weight[i] for i in range(self.num_experts)]
+        # outs = [outs[i] * outs_weight[i] for i in range(self.num_experts)]
         normalized_outs = [normalized_outs[i] * outs_weight[i] for i in range(self.num_experts)]
         return sum(normalized_outs), feat, W
