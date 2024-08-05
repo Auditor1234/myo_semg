@@ -258,10 +258,10 @@ class FuseLoss(nn.Module):
                 diversity_temperature = 1
                 temperature_mean = 1
 
-            # output_dist = F.log_softmax(logits/diversity_temperature,dim=1)
-            # with torch.no_grad():
-            #     mean_output_dist = F.softmax(x/diversity_temperature,dim=1)
-            # l -= 0.001*temperature_mean*temperature_mean*F.kl_div(output_dist,mean_output_dist,reduction="none").sum(dim=1).mean()
+            output_dist = F.log_softmax(logits/diversity_temperature,dim=1)
+            with torch.no_grad():
+                mean_output_dist = F.softmax(x/diversity_temperature,dim=1)
+            l -= 0.001*temperature_mean*temperature_mean*F.kl_div(output_dist,mean_output_dist,reduction="none").sum(dim=1).mean()
 
             loss += l.mean()
         return loss
