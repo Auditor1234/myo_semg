@@ -11,7 +11,7 @@ def parse_args():
     parser.add_argument("--fusion", default=False, action="store_true", help="use BLUE fusion method")
     parser.add_argument("--uncertainty_type", default='DST', help="choose uncertainty type either DST or RSM", type=str)
     parser.add_argument("--device", default=0, help="GPU id", type=int)
-    parser.add_argument("--reweight_epoch", default=20, help="epochs begin to reweight", type=int)
+    parser.add_argument("--reweight_epoch", default=30, help="epochs begin to reweight", type=int)
     args = parser.parse_args()
     return args
 
