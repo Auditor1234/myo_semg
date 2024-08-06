@@ -12,6 +12,7 @@ def parse_args():
     parser.add_argument("--uncertainty_type", default='DST', help="choose uncertainty type either DST or RSM", type=str)
     parser.add_argument("--device", default=0, help="GPU id", type=int)
     parser.add_argument("--reweight_epoch", default=30, help="epochs begin to reweight", type=int)
+    parser.add_argument("--variable_cloud_size", default=False, action="store_true", help="wether use identical gaussian cloud size")
     args = parser.parse_args()
     return args
 
@@ -25,6 +26,7 @@ if __name__ == '__main__':
     fusion = args.fusion
     fusion_type = 'BLUE' if fusion else 'mean'
     uncertaint_type = args.uncertainty_type
+    variable_cloud_size = args.variable_cloud_size
     model = f'UCL_{fusion_type}_{uncertaint_type}_{subjects_min}-{subjects_max}'
 
     root_dir = os.path.join('res', model)
@@ -58,6 +60,7 @@ if __name__ == '__main__':
                                                   fusion=fusion,
                                                   weight_path=weight_path,
                                                   device=device,
-                                                  reweight_epoch=reweight_epoch)
+                                                  reweight_epoch=reweight_epoch,
+                                                  variable_cloud_size=variable_cloud_size)
                 f.write('%.2f' % (acc * 100) + '%,')
                 f.flush()

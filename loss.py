@@ -246,7 +246,7 @@ class FuseLoss(nn.Module):
                         cloud_size = 1
                     sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  cloud_size)
                     variation = sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1)
-                    variation = variation * scale / 10
+                    variation = variation * scale / 3
                 l = F.cross_entropy(alpha + variation, y, weight=self.per_cls_weights_base)
                 # l += u_l * 0.1
 
