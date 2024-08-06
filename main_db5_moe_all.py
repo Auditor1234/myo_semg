@@ -27,7 +27,9 @@ if __name__ == '__main__':
     fusion_type = 'BLUE' if fusion else 'mean'
     uncertaint_type = args.uncertainty_type
     variable_cloud_size = args.variable_cloud_size
-    model = f'UCL_{fusion_type}_{uncertaint_type}_{subjects_min}-{subjects_max}'
+
+    cloud_size = 'variable' if variable_cloud_size else 'identical'
+    model = f'UCL_{fusion_type}_{uncertaint_type}_{subjects_min}-{subjects_max}_{cloud_size}'
 
     root_dir = os.path.join('res', model)
     csv_dir = os.path.join(root_dir, 'csv')
@@ -47,6 +49,9 @@ if __name__ == '__main__':
     print(f'uncertainty_type: {uncertaint_type}')
     print(f'acc_save_path: {acc_save_path}')
     print(f'weight_path: {weight_path}')
+    print(f'reweight_epoch: {reweight_epoch}')
+    print(f'device: {device}')
+    print(f'variable_cloud_size: {variable_cloud_size}')
  
     with open(acc_save_path, 'w') as f:
         f.write(',')
