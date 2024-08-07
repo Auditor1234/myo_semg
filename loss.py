@@ -256,11 +256,12 @@ class FuseLoss(nn.Module):
                         #     cloud_size = (cloud_size - min_size) / (max_size - min_size)
                         #     cloud_size = torch.where(cloud_size < 0.5, 0.7, cloud_size)
                         sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  cloud_size)
-                        variation = sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1).abs()
+                        variation = sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1)
                     else:
                         cloud_size = 1 / 3
                         sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  cloud_size)
-                        variation = sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1).abs()/self.gcl_m_list.max() *self.gcl_m_list
+                        variation = sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1).abs() \
+                            / self.gcl_m_list.max() * self.gcl_m_list
                     variation = variation * scale
                 l = F.cross_entropy(alpha - variation, y, weight=self.per_cls_weights_base)
                 # l += u_l * 0.1
