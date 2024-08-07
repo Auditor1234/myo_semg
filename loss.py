@@ -171,7 +171,7 @@ class FuseLoss(nn.Module):
         self.gen_uncertainty = gen_uncertainty
         self.variable_cloud_size = variable_cloud_size
         self.gcl_noise_mul = 0.5
-        self.ucl_noise_mul = 1/3
+        self.ucl_noise_mul = -1/3
         gcl_m_list = torch.log(torch.tensor(cls_num_list))
         gcl_m_list = gcl_m_list.max()-gcl_m_list
         self.gcl_m_list = gcl_m_list
