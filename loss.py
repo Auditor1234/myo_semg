@@ -170,6 +170,11 @@ class FuseLoss(nn.Module):
         self.num_cls = len(cls_num_list)
         self.gen_uncertainty = gen_uncertainty
         self.variable_cloud_size = variable_cloud_size
+        self.noise_mul = 0.5
+        gcl_m_list = torch.log(torch.tensor(cls_num_list))
+        gcl_m_list = gcl_m_list.max()-gcl_m_list
+        self.gcl_m_list = gcl_m_list
+
 
         if reweight_epoch!=-1:
             idx = 1
@@ -196,6 +201,7 @@ class FuseLoss(nn.Module):
     def to(self,device):
         super().to(device)
         self.m_list = self.m_list.to(device)
+        self.gcl_m_list = self.gcl_m_list.to(device)
         if self.per_cls_weights_enabled is not None:
             self.per_cls_weights_enabled = self.per_cls_weights_enabled.to(device)
         if self.per_cls_weights_enabled_diversity is not None:
@@ -242,12 +248,21 @@ class FuseLoss(nn.Module):
                 with torch.no_grad():
                     if self.variable_cloud_size:
                         cloud_size = self.gen_uncertainty(logits).to(device)
+                        # min_size = torch.min(cloud_size)
+                        # max_size = torch.max(cloud_size)
+                        # if min_size == max_size:
+                        #     cloud_size = 1 / 3
+                        # else:
+                        #     cloud_size = (cloud_size - min_size) / (max_size - min_size)
+                        #     cloud_size = torch.where(cloud_size < 0.5, 0.7, cloud_size)
+                        sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  cloud_size)
+                        variation = sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1).abs()
                     else:
-                        cloud_size = 1
-                    sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  cloud_size)
-                    variation = sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1)
-                    variation = variation * scale / 3
-                l = F.cross_entropy(alpha + variation, y, weight=self.per_cls_weights_base)
+                        cloud_size = 1 / 3
+                        sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  cloud_size)
+                        variation = sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1).abs()/self.gcl_m_list.max() *self.gcl_m_list
+                    variation = variation * scale
+                l = F.cross_entropy(alpha - variation, y, weight=self.per_cls_weights_base)
                 # l += u_l * 0.1
 
             # diversity
