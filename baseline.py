@@ -308,4 +308,5 @@ class CNN2DEncoder(nn.Module):
         """
         shape: (N, C, L)
         """
-        return self.fc(self.net(input.unsqueeze(1))), None, None
+        logits = self.fc(self.net(input.unsqueeze(1)))
+        return logits, logits, None

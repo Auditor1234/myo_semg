@@ -5,6 +5,8 @@ from sklearn.metrics import confusion_matrix
 from sklearn.manifold import TSNE
 import umap
 import torch.nn.functional as F
+from matplotlib.colors import ListedColormap
+from common_utils import setup_seed
 
 
 def plot_confusion_matrix(y_true, y_pred, title, labels_name=None, colorbar=False, file='confusion_matrix.png'):
@@ -68,16 +70,28 @@ def ACC(output, target, region_len=100/3, subject=1, file=None, save_info=[]):
     return acc, region_acc, split_acc
 
 def plot_features(x, y, save_path='res/img/features.png', mode='tsne'):
+    setup_seed()
     if mode == 'tsne':
         reducer = TSNE(random_state=42)
     else:
         reducer = umap.UMAP(random_state=42)
     results = reducer.fit_transform(x)
+    class_num = 12
     plt.clf()
-    plt.scatter(results[:, 0], results[:, 1], c=y, label=mode)
-    plt.colorbar(boundaries=np.arange(11)-0.5).set_ticks(np.arange(10))
-    plt.legend()
-    plt.savefig(save_path, dpi=120)
+    colors = ["#d32c1f", "#CD8C95", "#436bad", "#CDAD00", "#04f489", "#fe019a", 
+              "#06470c", "#61de2a", "#cbf85f", "#FFBBFF", "#7FFFD4", "#0000FF",
+              "#02ccfe", "#9900fa", "#5d1451"]
+    for i in range(class_num):
+        index = y == i
+        plt.scatter(results[index, 0], results[index, 1], color=colors[i], label=f'{i + 1}')
+    plt.legend(bbox_to_anchor=(1, 1))
+    plt.xticks([])
+    plt.yticks([])
+    if 'CNN' in save_path:
+        plt.title('CNN')
+    else:
+        plt.title('UCL')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
 def gen_uncertainty(logits, uncertainty_type='DST'):
     output = F.normalize(logits.clone().detach())
@@ -123,14 +137,15 @@ def plot_uncertainty_accuracy(output, y_true):
     plt.clf()
     fig, ax1 = plt.subplots()
     ax1.plot(acc, label='accuracy', color='green', linestyle='-',marker='o')
-    ax1.set_ylabel("accuracy")
+    ax1.set_ylabel("accuracy", labelpad=5)
+    ax1.set_xlabel('class index')
 
     ax2 = ax1.twinx()
     ax2.plot(u_avg, label='uncertainty', color='red', linestyle='-',marker='X')
-    ax2.set_ylabel("uncertainty", labelpad=40)
+    ax2.set_ylabel("uncertainty", labelpad=5)
 
     fig.legend(loc="upper right")
     plt.title('uncertainty vs accuracy')
-    plt.savefig('res/img/uncertainty-accuracy.png')
+    plt.savefig('res/img/uncertainty-accuracy.png', bbox_inches='tight')
 
     

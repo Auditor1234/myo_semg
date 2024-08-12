@@ -658,7 +658,7 @@ class EMGBranchNaive(nn.Module):
         x = self.share_net(x)
         outs = []
         self.logits = outs
-        feat = []
+        feat = None
         W = []
         b0 = None
         self.w = [torch.ones(len(x),dtype=torch.float,device=x.device)]
@@ -667,9 +667,12 @@ class EMGBranchNaive(nn.Module):
             xi = self.layer1s[i](x)
             xi = xi.flatten(1)
             xi = self.linears[i](xi)
+            if i == 0:
+                feat = xi.detach().clone()
             outs.append(xi)
 
         normalized_outs = [torch.softmax(outs[i], dim=-1) for i in range(self.num_experts)]
+        # normalized_outs = [outs[i].detach().clone() for i in range(self.num_experts)]
         if self.reweight and self.fusion:
             inv_u = []
             with torch.no_grad():

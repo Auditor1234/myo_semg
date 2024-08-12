@@ -17,7 +17,8 @@ def main(subjects, num_experts,
          weight_path='res/weight/best.pt', 
          uncertainty_type='DST',
          device=torch.device('cuda'),
-         variable_cloud_size=True):
+         variable_cloud_size=True,
+         dist_path=None):
     setup_seed(0)
 
     file_fmt = 'datasets/DB5/s%d/repetition%d.pt'
@@ -73,10 +74,11 @@ def main(subjects, num_experts,
                                        subject=subjects[0], 
                                        file=save_file,
                                        weight_path=weight_path,
-                                       device=device)
+                                       device=device,
+                                       dist_path=dist_path)
     return acc, region_acc, split_acc
 
 if __name__ == '__main__':
-    subjects = [1]
+    subjects = [2]
     num_experts = 1
-    main(subjects, num_experts, reweight_epoch=30)
+    main(subjects, num_experts, reweight_epoch=30, uncertainty_type='DST', dist_path='res/img/subject2-test-DST-variable')
