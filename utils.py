@@ -19,7 +19,7 @@ def plot_confusion_matrix(y_true, y_pred, title, labels_name=None, colorbar=Fals
     if colorbar:
         plt.colorbar()
     if labels_name == None:
-        labels_name = ['%d' % i for i in range(len(cm))]
+        labels_name = ['%d' % (i + 1) for i in range(len(cm))]
     num_local = np.array(range(len(labels_name)))    
     plt.xticks(num_local, labels_name)    # 将标签印在x轴坐标上
     plt.yticks(num_local, labels_name)    # 将标签印在y轴坐标上
@@ -135,13 +135,14 @@ def plot_uncertainty_accuracy(output, y_true):
 
 
     plt.clf()
+    x_label = list(range(1, num_class + 1))
     fig, ax1 = plt.subplots()
-    ax1.plot(acc, label='accuracy', color='green', linestyle='-',marker='o')
+    ax1.plot(x_label, acc, label='accuracy', color='green', linestyle='-',marker='o', )
     ax1.set_ylabel("accuracy", labelpad=5)
     ax1.set_xlabel('class index')
 
     ax2 = ax1.twinx()
-    ax2.plot(u_avg, label='uncertainty', color='red', linestyle='-',marker='X')
+    ax2.plot(x_label, u_avg, label='uncertainty', color='red', linestyle='-',marker='X')
     ax2.set_ylabel("uncertainty", labelpad=5)
 
     fig.legend(loc="upper right")
