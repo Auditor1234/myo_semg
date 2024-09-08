@@ -4,6 +4,7 @@ import torch.nn.init as init
 import torch.nn.functional as F
 from collections import OrderedDict
 from utils import gen_uncertainty
+import numpy as np
 
 
 class CNN(nn.Module):
@@ -590,7 +591,7 @@ class MoE5FC(nn.Module):
 
 
 class EMGBranchNaive(nn.Module):
-    def __init__(self, classes, num_experts, dropout=0.2, reweight_epoch=30, fusion=True, gen_uncertainty=None) -> None:
+    def __init__(self, classes, num_experts, dropout=0.5, reweight_epoch=30, fusion=True, gen_uncertainty=None) -> None:
         super().__init__()
         self.num_experts = num_experts
         self.classes = classes
@@ -606,9 +607,31 @@ class EMGBranchNaive(nn.Module):
         )
 
         self.layer1s = nn.ModuleList([self._make_layer(32, 64, dropout) for _ in range(num_experts)])
-        self.linears = nn.ModuleList([self._make_fc(64*12*3, classes) for _ in range(num_experts)])
+        self.linears = nn.ModuleList([self._make_nonlinear3(64*12*3, classes, dropout) for _ in range(num_experts)])
         self.reweight = False
         self.eta = 1.5
+        self.initialize_weights()
+
+        print("Number Parameters: ", self.get_n_params())
+
+    def get_n_params(self):
+        model_parameters = filter(lambda p: p.requires_grad, self.parameters())
+        number_params = sum([np.prod(p.size()) for p in model_parameters])
+        return number_params
+
+    def init_weights(self):
+        for m in self.modules():
+            torch.nn.init.kaiming_normal(m.weight)
+            m.bias.data.zero_()
+
+    def initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                torch.nn.init.kaiming_normal_(m.weight)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                torch.nn.init.kaiming_normal_(m.weight)
+                m.bias.data.zero_()
 
     def _hook_before_epoch(self, epoch):
         if epoch >= self.reweight_epoch:
@@ -633,26 +656,32 @@ class EMGBranchNaive(nn.Module):
                 nn.AvgPool2d(kernel_size=(1, 3))
             )
     
-    def _make_fc(self, in_dim, classes):
+    def _make_fc(self, in_dim, classes, dropout):
         return nn.Sequential(
-            nn.ReLU(),
-            nn.Linear(in_dim, 512),
-            nn.ReLU(),
-            nn.Linear(512, 64),
-            nn.ReLU(),
-            nn.Linear(64, classes),
+            nn.Linear(in_dim, 500),
+            nn.BatchNorm1d(500),
+            nn.PReLU(500),
+            nn.Dropout(dropout),
+            nn.Linear(500, classes),
         )
 
-    def _make_normLinear(self, in_dim, classes):
+    def _make_nonlinear2(self, in_dim, classes, dropout):
+        return nn.Sequential(
+            nn.PReLU(in_dim),
+            nn.Linear(in_dim, classes),
+        )
+
+    def _make_nonlinear3(self, in_dim, classes, dropout):
         return nn.Sequential(
             nn.ReLU(),
             nn.Linear(in_dim, 512),
             nn.ReLU(),
-            nn.Linear(512, 64),
-            nn.ReLU(),
-            NormedLinear(64, classes),
+            # nn.Linear(512, 64),
+            # nn.ReLU(),
+            nn.Linear(512, classes),
         )
-    
+
+
     def forward(self, x, y=None):
         x = x.unsqueeze(1)
         x = self.share_net(x)
@@ -673,7 +702,7 @@ class EMGBranchNaive(nn.Module):
 
         normalized_outs = [torch.softmax(outs[i], dim=-1) for i in range(self.num_experts)]
         # normalized_outs = [outs[i].detach().clone() for i in range(self.num_experts)]
-        if self.reweight and self.fusion:
+        if self.fusion:
             inv_u = []
             with torch.no_grad():
                 for i in range(len(outs)):
@@ -684,6 +713,6 @@ class EMGBranchNaive(nn.Module):
             outs_weight = [(inv_u[i] / denominator).unsqueeze(1) for i in range(self.num_experts)]
         else:
             outs_weight = [1 / self.num_experts for _ in range(self.num_experts)]
-        # outs = [outs[i] * outs_weight[i] for i in range(self.num_experts)]
+
         normalized_outs = [normalized_outs[i] * outs_weight[i] for i in range(self.num_experts)]
         return sum(normalized_outs), feat, W

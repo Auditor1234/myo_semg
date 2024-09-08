@@ -90,16 +90,23 @@ def plot_features(x, y, save_path='res/img/features.png', mode='tsne'):
     if 'CNN' in save_path:
         plt.title('CNN')
     else:
-        plt.title('UCL')
+        plt.title('UCL-BLUE')
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
-def gen_uncertainty(logits, uncertainty_type='DST'):
-    output = F.normalize(logits.clone().detach())
+def gen_uncertainty(logits, uncertainty_type='DST', softmax=True):
+    # output = F.normalize(logits.clone().detach())
+    if softmax:
+        output = torch.softmax(logits, dim=1)
+    else:
+        output = logits.clone().detach()
     uncertainty = None
     if uncertainty_type == 'DST':
+        min_uncertainty = 0.466000
+        max_uncertainty = 0.479178
         alpha = torch.exp(output) + 1
         S = alpha.sum(dim=1,keepdim=True)
         uncertainty = output.shape[1] / S.squeeze(-1)
+        uncertainty = (uncertainty - min_uncertainty) / (max_uncertainty - min_uncertainty)
     elif uncertainty_type == 'RSM':
         output_exp = torch.exp(output)
         max_val, max_idx = torch.max(output_exp, dim=-1)
@@ -125,9 +132,9 @@ def plot_uncertainty_accuracy(output, y_true):
     cm = confusion_matrix(y_true, y_pred)
     acc = []
     for i in range(len(cm)):
-        acc.append(cm[i, i] / sum(cm[:, i]))
+        acc.append(cm[i, i] / (sum(cm[i, :]) + 1e-6))
     
-    uncertainty = gen_uncertainty(output)
+    uncertainty = gen_uncertainty(output, softmax=False)
     u_avg = []
     for i in  range(num_class):
         u_i = uncertainty[y_true == i]
@@ -137,8 +144,8 @@ def plot_uncertainty_accuracy(output, y_true):
     plt.clf()
     x_label = list(range(1, num_class + 1))
     fig, ax1 = plt.subplots()
-    ax1.plot(x_label, acc, label='accuracy', color='green', linestyle='-',marker='o', )
-    ax1.set_ylabel("accuracy", labelpad=5)
+    ax1.plot(x_label, acc, label='recall', color='green', linestyle='-',marker='o', )
+    ax1.set_ylabel("recall", labelpad=5)
     ax1.set_xlabel('class index')
 
     ax2 = ax1.twinx()
@@ -146,7 +153,7 @@ def plot_uncertainty_accuracy(output, y_true):
     ax2.set_ylabel("uncertainty", labelpad=5)
 
     fig.legend(loc="upper right")
-    plt.title('uncertainty vs accuracy')
-    plt.savefig('res/img/uncertainty-accuracy.png', bbox_inches='tight')
+    plt.title('uncertainty vs recall')
+    plt.savefig('res/img/uncertainty-recall.png', bbox_inches='tight')
 
     

@@ -158,8 +158,9 @@ def edl_mse_loss(output, target, epoch_num=10, classes=12, ecnn_type=2):
 
 
 class FuseLoss(nn.Module):
-    def __init__(self, cls_num_list=None, max_m=0.5, reweight_epoch=30, reweight_factor=0.05, annealing=500, tau=0.54, 
-                 gen_uncertainty=None, variable_cloud_size=False):
+    def __init__(self, cls_num_list=None, max_m=0.5, reweight_epoch=30, reweight_factor=0.05, adjust_mul=1,
+                 gen_uncertainty=None, variable_cloud_size=False,
+                 ucl_noise_mul=1/3, cloud_size_mul=5/3):
         super(FuseLoss,self).__init__()
         self.reweight_epoch = reweight_epoch
 
@@ -168,10 +169,14 @@ class FuseLoss(nn.Module):
         m_list = torch.tensor(m_list, dtype=torch.float, requires_grad=False)
         self.m_list = m_list
         self.num_cls = len(cls_num_list)
+
+        # uncertainty-based cloud learning
+        self.adjust_mul = adjust_mul
         self.gen_uncertainty = gen_uncertainty
         self.variable_cloud_size = variable_cloud_size
-        self.gcl_noise_mul = 0.5
-        self.ucl_noise_mul = -1/3
+        self.gcl_noise_mul = 1 / 2
+        self.ucl_noise_mul = ucl_noise_mul # -1 / 3
+        self.cloud_size_mul = cloud_size_mul # 5 / 3
         gcl_m_list = torch.log(torch.tensor(cls_num_list))
         gcl_m_list = gcl_m_list.max()-gcl_m_list
         self.gcl_m_list = gcl_m_list
@@ -193,11 +198,8 @@ class FuseLoss(nn.Module):
 
         # save diversity per_cls_weights
         self.per_cls_weights_enabled_diversity = torch.tensor(per_cls_weights,dtype=torch.float,requires_grad=False)
-        self.T = (reweight_epoch+annealing)/reweight_factor
-        self.tau = tau
         self.per_cls_weights_diversity = None
         self.tempature = []
-        self.MSELoss = nn.MSELoss()
 
     def to(self,device):
         super().to(device)
@@ -219,66 +221,68 @@ class FuseLoss(nn.Module):
                 self.per_cls_weights_base = None
                 self.per_cls_weights_diversity = None
 
-    def get_final_output(self, x, y):
-        index = torch.zeros_like(x, dtype=torch.bool, device=x.device)
+    def get_final_output(self,x,y):
+        index = torch.zeros_like(x,dtype=torch.uint8,device=x.device)
         y = y.type(torch.int64)
-        index.scatter_(1, y.data.view(-1,1), 1)
+        index.scatter_(1,y.data.view(-1,1),1)
         index_float = index.float()
-        batch_m = torch.matmul(self.m_list[None,:], index_float.transpose(0,1))
+        batch_m = torch.matmul(self.m_list[None,:],index_float.transpose(0,1))
         batch_m = batch_m.view((-1, 1))
-        x_m = x - batch_m * torch.mean(torch.abs(x), dim=-1, keepdim=True)
-        return torch.where(index, x_m, x)
-        # temp = torch.mean(torch.abs(x), dim=-1, keepdim=True)
-        # return x - self.m_list * temp
+        x_m = x-30*batch_m
+        return torch.exp(torch.where(index,x_m,x))
 
     def forward(self, x, y, epoch, extra_info=None):
         device = x.device
         loss = 0.0
         for i in range(extra_info["num_expert"]):
+
+            y = y.type(torch.int64)
+            index = torch.zeros_like(x,dtype=torch.uint8,device=x.device)
+            index.scatter_(1,y.data.view(-1,1),1)
+
             # logits adjustment
             logits = extra_info["logits"][i]
+            
             scale = torch.mean(torch.abs(logits), dim=-1, keepdim=True)
-            # alpha = self.get_final_output(logits, y)
-            alpha = logits - scale * self.m_list
-
-            # uncertainty-aware perturbation learning
-            y = y.type(torch.int64)
-            if epoch < self.reweight_epoch:
-                l = F.cross_entropy(alpha, y, weight=self.per_cls_weights_base)
-            else:
+            if self.variable_cloud_size:
+                alpha = torch.where(index, logits - scale * self.m_list * self.adjust_mul, logits)
+                # if epoch < self.reweight_epoch:
+                #     l = F.cross_entropy(alpha, y, weight=self.per_cls_weights_base)
+                # else:
+                # uncertainty-aware perturbation learning
                 with torch.no_grad():
-                    if self.variable_cloud_size:
-                        cloud_size = self.gen_uncertainty(logits).to(device)
-                        # min_size = torch.min(cloud_size)
-                        # max_size = torch.max(cloud_size)
-                        # if min_size == max_size:
-                        #     cloud_size = 1 / 3
-                        # else:
-                        #     cloud_size = (cloud_size - min_size) / (max_size - min_size)
-                        #     cloud_size = torch.where(cloud_size < 0.5, 0.7, cloud_size)
-                        sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  cloud_size)
-                        variation = self.ucl_noise_mul * sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1)
-                    else:
-                        cloud_size = 1 / 3
-                        sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  cloud_size)
-                        variation = self.gcl_noise_mul * sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1).abs() \
-                            / self.gcl_m_list.max() * self.gcl_m_list
-                    variation = variation * scale
+                    cloud_size = self.gen_uncertainty(logits).to(device)
+                    cloud_size = torch.clamp(cloud_size, min=1 / 4) # 1 / 3
+                sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  self.cloud_size_mul * cloud_size)
+                variation = self.ucl_noise_mul * sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1).abs()
+                variation = variation * scale
                 l = F.cross_entropy(alpha - variation, y, weight=self.per_cls_weights_base)
-                # l += u_l * 0.1
 
-            # diversity
-            if self.per_cls_weights_diversity is not None:
-                diversity_temperature = self.per_cls_weights_diversity.view((1,-1))
-                temperature_mean = diversity_temperature.mean().item()
+                # # adjusted parameters of D(p|alpha)
+                # yi = F.one_hot(y,num_classes=alpha.shape[1])
+                # alpha = torch.exp(logits.clamp(max=3))
+                # alpha_tilde = yi+(1-yi)*(alpha+1)
+                # l += min(1, (epoch + 1) / 30) * KL(alpha_tilde, self.num_cls).mean()
+
+                # # diversity
+                # if self.per_cls_weights_diversity is not None:
+                #     diversity_temperature = self.per_cls_weights_diversity.view((1,-1))
+                #     temperature_mean = diversity_temperature.mean().item()
+                # else:
+                #     diversity_temperature = 1
+                #     temperature_mean = 1
+                # output_dist = F.log_softmax(logits/diversity_temperature,dim=1)
+                # with torch.no_grad():
+                #     mean_output_dist = F.softmax(x/diversity_temperature,dim=1)
+                # l -= 0.01*temperature_mean*temperature_mean*F.kl_div(output_dist,mean_output_dist,reduction="none").sum(dim=1).mean()
             else:
-                diversity_temperature = 1
-                temperature_mean = 1
-
-            output_dist = F.log_softmax(logits/diversity_temperature,dim=1)
-            with torch.no_grad():
-                mean_output_dist = F.softmax(x/diversity_temperature,dim=1)
-            l -= 0.001*temperature_mean*temperature_mean*F.kl_div(output_dist,mean_output_dist,reduction="none").sum(dim=1).mean()
+                cloud_size = 1 / 3
+                sampler = normal.Normal(torch.zeros(x.shape[:1], device=device),  cloud_size)
+                variation = self.gcl_noise_mul * sampler.sample(x.shape[1:]).to(device).permute(1, 0).clamp(-1, 1).abs() \
+                    / self.gcl_m_list.max() * self.gcl_m_list
+                variation = variation * scale
+                logits = torch.where(index, logits - variation, logits)
+                l = F.cross_entropy(logits , y, weight=self.per_cls_weights_base)
 
             loss += l.mean()
         return loss
@@ -317,3 +321,16 @@ def focal_loss(predict, target, gamma=2):
     log_p = probs.log()
     loss = -(torch.pow((1 - probs), gamma)) * log_p
     return loss.mean()
+
+
+def KL(alpha, c):
+    S_alpha = torch.sum(alpha, dim=1, keepdim=True)
+    beta = torch.ones((1, c)).cuda()
+    # Mbeta = torch.ones((alpha.shape[0],c)).cuda()
+    S_beta = torch.sum(beta, dim=1, keepdim=True)
+    lnB = torch.lgamma(S_alpha) - torch.sum(torch.lgamma(alpha), dim=1, keepdim=True)
+    lnB_uni = torch.sum(torch.lgamma(beta), dim=1, keepdim=True) - torch.lgamma(S_beta)
+    dg0 = torch.digamma(S_alpha)
+    dg1 = torch.digamma(alpha)
+    kl = torch.sum((alpha - beta) * (dg1 - dg0), dim=1, keepdim=True) + lnB + lnB_uni
+    return kl

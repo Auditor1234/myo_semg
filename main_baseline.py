@@ -2,7 +2,7 @@ import torch
 import copy
 import numpy as np
 from functools import partial
-from baseline import TCN, CNN2DEncoder, ECNN_Model
+from baseline import TCN, CNN2DEncoder, ECNN_Model, CNN
 from train import train
 # import matplotlib.pyplot as plt
 from common_utils import setup_seed, data_label_shuffle
@@ -63,7 +63,7 @@ def main(model, subjects, loss_func=cross_entropy,
     return acc
 
 if __name__ == '__main__':
-    models = [TCN, ] # 
+    models = [CNN, ] # 
     for model in models:
         model_name = model.__name__
         subjects_num = 10
@@ -78,7 +78,7 @@ if __name__ == '__main__':
         else:
             loss_func = cross_entropy
             with open(f'res/csv/{model_name}_accuracy.csv', 'w') as f:
-                for subject in range(8, subjects_num + 1):
+                for subject in range(1, subjects_num + 1):
                     acc = main(model, subjects=subject, loss_func=loss_func)
                     f.write(str(subject) + ',' + '%.2f' % (acc * 100) + '%\n')
                     f.flush()

@@ -310,3 +310,64 @@ class CNN2DEncoder(nn.Module):
         """
         logits = self.fc(self.net(input.unsqueeze(1)))
         return logits, logits, None
+
+
+class CNN(nn.Module):
+    def __init__(self, classes=10, kernel_size=3, dropout=0.2):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=(kernel_size, 5)), # shape(B,32,14,46)
+            nn.BatchNorm2d(32),
+            nn.PReLU(32),
+            nn.Dropout2d(dropout),
+            # nn.MaxPool2d(kernel_size=(1, 3)),
+            nn.AvgPool2d(kernel_size=(1, 3)), # shape(B,32,16,15)
+            nn.Conv2d(32, 64, kernel_size=(kernel_size, 5)), # shape(B,64,12,11)
+            nn.BatchNorm2d(64),
+            nn.PReLU(64),
+            nn.Dropout2d(dropout),
+            # nn.MaxPool2d(kernel_size=(1, 3)),
+            nn.AvgPool2d(kernel_size=(1, 3)), # shape(B,64,12,3)
+            nn.Flatten(),
+        )
+        in_dim = 64*12*3
+        self.fc = nn.Sequential(
+            nn.ReLU(),
+            nn.Linear(in_dim, 512),
+            nn.ReLU(),
+            nn.Linear(512, classes),
+        )
+
+        self.initialize_weights()
+
+        print("Number Parameters: ", self.get_n_params())
+
+    def get_n_params(self):
+        model_parameters = filter(lambda p: p.requires_grad, self.parameters())
+        number_params = sum([np.prod(p.size()) for p in model_parameters])
+        return number_params
+
+    
+    def initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                torch.nn.init.kaiming_normal_(m.weight)
+                m.bias.data.zero_()
+            elif isinstance(m, nn.Linear):
+                torch.nn.init.kaiming_normal_(m.weight)
+                m.bias.data.zero_()
+
+    
+    def _hook_before_epoch(self, epoch):
+        pass
+
+    def _hook_after_epoch(self, epoch):
+        pass
+
+    def forward(self, input, target=None):
+        """
+        shape: (N, C, L)
+        """
+        logits = self.fc(self.net(input.unsqueeze(1)))
+        return logits, logits, None
+    

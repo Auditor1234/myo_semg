@@ -4,6 +4,7 @@ from train import train
 from common_utils import setup_seed, data_label_shuffle
 from utils import gen_uncertainty
 from loss import cross_entropy, FuseLoss
+from config import linear_fc_config, nonlinear2_fc_config, nonlinear3_fc_config
 from functools import partial
 import torch
 from data_process import load_emg_label, filter_labels,\
@@ -18,7 +19,9 @@ def main(subjects, num_experts,
          uncertainty_type='DST',
          device=torch.device('cuda'),
          variable_cloud_size=True,
-         dist_path=None):
+         dist_path=None,
+         ucl_mul=1/2,
+         adj_mul=1):
     setup_seed(0)
 
     file_fmt = 'datasets/DB5/s%d/repetition%d.pt'
@@ -64,11 +67,14 @@ def main(subjects, num_experts,
                            fusion=fusion, 
                            gen_uncertainty=uncertainty_generator)
     print(f'-------{num_experts} {model.__class__.__name__}-------')
-
+    subject_config = nonlinear3_fc_config(subjects[0])
     loss_func = FuseLoss(np.bincount(y_train), 
-                         reweight_epoch=reweight_epoch, 
+                         reweight_epoch=reweight_epoch,
+                         adjust_mul=subject_config.adj_mul,
                          gen_uncertainty=uncertainty_generator,
-                         variable_cloud_size=variable_cloud_size)
+                         variable_cloud_size=variable_cloud_size,
+                         ucl_noise_mul=subject_config.ucl_mul,
+                         cloud_size_mul=1)
     acc, region_acc, split_acc = train(model, epochs, x_train, y_train, x_val, y_val, x_test, y_test, 
                                        loss_func=loss_func, 
                                        subject=subjects[0], 
@@ -79,6 +85,6 @@ def main(subjects, num_experts,
     return acc, region_acc, split_acc
 
 if __name__ == '__main__':
-    subjects = [2]
+    subjects = [1]
     num_experts = 1
-    main(subjects, num_experts, reweight_epoch=30, uncertainty_type='DST', dist_path='res/img/subject2-test-DST-variable')
+    main(subjects, num_experts, reweight_epoch=30, uncertainty_type='DST')

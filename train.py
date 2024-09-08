@@ -14,7 +14,7 @@ def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y,
           loss_func=nn.CrossEntropyLoss(), 
           subject=0, 
           file=None, 
-          weight_path='res/best.pt',
+          weight_path='res/weight/best.pt',
           device=None,
           dist_path=None):
     train_X = torch.tensor(train_X, dtype=torch.float16)
@@ -27,19 +27,19 @@ def train(model, epochs, train_X, train_y, val_X, val_y, test_X, test_y,
     train_loader = DataLoader(
         dataset=CNNDataset(train_X, train_y),
         batch_size=32,
-        # drop_last=True
+        drop_last=True
         )
 
     eval_loader = DataLoader(
         dataset=CNNDataset(val_X, val_y),
         batch_size=32,
-        # drop_last=True
+        drop_last=True
         )
     
     test_loader = DataLoader(
         dataset=CNNDataset(test_X, test_y),
         batch_size=32,
-        # drop_last=True
+        drop_last=True
         )
 
     num_class = len(torch.unique(test_y))
